@@ -30,21 +30,23 @@ body.idle { cursor: none; }
 .slide {
   position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
   width: min(1040px, calc(100% - 48px)); box-sizing: border-box; text-align: center; pointer-events: none;
-  padding: clamp(26px, 4.2vw, 64px) clamp(24px, 5vw, 80px);
-  background: rgba(24, 18, 13, 0.4); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
-  border: 1px solid rgba(243, 234, 217, 0.2); border-radius: 6px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  padding: 0;
   transition: opacity 0.7s ease, transform 0.7s ease;
 }
 .slide.out { opacity: 0; transform: translate(-50%, -46%); }
 .slide h1 {
   font-family: var(--display); font-weight: 700; font-size: clamp(34px, 5.4vw, 92px); line-height: 1.02;
-  margin: 0; letter-spacing: 0.01em; text-wrap: balance; text-shadow: 0 2px 20px rgba(0, 0, 0, 0.45);
+  margin: 0; letter-spacing: 0.01em; text-wrap: balance;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.6), 0 4px 28px rgba(0, 0, 0, 0.55);
 }
-.slide h1::after { content: ""; display: block; width: 76px; height: 3px; background: var(--grana); margin: 0.38em auto 0.5em; }
+.slide h1::after { content: ""; display: block; width: 76px; height: 3px; background: var(--grana); margin: 0.38em auto 0.5em; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }
+.slide.cover h1 { font-size: clamp(48px, 9vw, 150px); }
+.slide.cover p { font-size: clamp(22px, 3vw, 48px); }
+.slide p:empty { display: none; }
 .slide p {
   font-size: clamp(18px, 2.15vw, 36px); line-height: 1.45; margin: 0 auto; max-width: 40ch;
-  text-wrap: pretty; text-shadow: 0 1px 12px rgba(0, 0, 0, 0.55);
+  text-wrap: pretty; font-weight: 500;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.7), 0 1px 4px rgba(0, 0, 0, 0.75), 0 2px 18px rgba(0, 0, 0, 0.6);
 }
 @media (prefers-reduced-motion: reduce) { .slide { transition: none; } }
 </style>
@@ -810,6 +812,7 @@ body.idle { cursor: none; }
   ];
   // ---------- Presentación: un clic = siguiente toma ----------
   const slides = [
+    { title: "Los zapotecas", text: "", cover: true, cam: [940, 400, 1320], tgt: [0, 0, -30] },
     { title: "Ubicación geográfica", cam: [620, 260, 880], tgt: [0, 10, -40],
       text: "Se desarrollaron principalmente en los Valles Centrales de Oaxaca, aunque también ocuparon otras regiones del estado." },
     { title: "Periodo", cam: [216, 150, 297], tgt: [0, 0, -10],
@@ -825,7 +828,8 @@ body.idle { cursor: none; }
     { title: "Aportaciones culturales", cam: [52, 18, 136], tgt: [12, 4, 100],
       text: "Desarrollaron uno de los sistemas de escritura más antiguos de Mesoamérica, además de calendarios, arquitectura monumental, cerámica y esculturas." },
     { title: "Elementos distintivos", cam: [-64, 9, 146], tgt: [-94, 3, 122],
-      text: "Destacan Monte Albán, las urnas funerarias, la escritura zapoteca, las inscripciones en piedra y el culto a Cocijo. También son conocidos como benizáa, “gente de las nubes”." }
+      text: "Destacan Monte Albán, las urnas funerarias, la escritura zapoteca, las inscripciones en piedra y el culto a Cocijo. También son conocidos como benizáa, “gente de las nubes”." },
+    { title: "Xquixhepe' lii", text: "(Gracias)", cover: true, cam: [250, 120, 320], tgt: [0, 4, -40] }
   ];
   const $ = (id) => document.getElementById(id);
   const slideEl = $("slide");
@@ -835,7 +839,7 @@ body.idle { cursor: none; }
   function show(i) {
     slideEl.classList.add("out");
     clearTimeout(swap);
-    swap = setTimeout(() => { $("stitle").textContent = slides[i].title; $("stext").textContent = slides[i].text; slideEl.classList.remove("out"); }, reduceMotion ? 0 : 650);
+    swap = setTimeout(() => { $("stitle").textContent = slides[i].title; $("stext").textContent = slides[i].text; slideEl.classList.toggle("cover", !!slides[i].cover); slideEl.classList.remove("out"); }, reduceMotion ? 0 : 650);
   }
   function go(i, dur) {
     if (i < 0 || i >= slides.length) return;

@@ -1,6 +1,6 @@
 # Recorrido Monte Albán
 
-Presentación de 8 diapositivas sobre los zapotecas con una maqueta 3D de la Gran Plaza zapoteca de fondo. En cada cambio de diapositiva la cámara vuela a una nueva toma.
+Presentación de 8 diapositivas, más portada y cierre, sobre los zapotecas con una maqueta 3D de la Gran Plaza zapoteca de fondo. En cada cambio de diapositiva la cámara vuela a una nueva toma.
 
 **Ver en línea:** https://emilianocros27-bit.github.io/presentaci-nzapotecas/
 **Modo ligero** (menos árboles y pasto, para equipos lentos): https://emilianocros27-bit.github.io/presentaci-nzapotecas/#ligero
