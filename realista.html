@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Los zapotecas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+SC:wght@500;700&family=Alegreya+Sans:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: escena WebGL a sangre completa + códice flotante a la izquierda (abajo en móvil) */
+:root {
+  --ink: #f3ead9;
+  --muted: #c9bba3;
+  --panel: rgba(31, 25, 20, 0.8);
+  --line: rgba(243, 234, 217, 0.16);
+  --grana: #c8452f;
+  --ocre: #d9a55b;
+  --ground: #1d1814;
+  --display: "Alegreya SC", Georgia, serif;
+  --body: "Alegreya Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; margin: 0; overflow: hidden; background: var(--ground); color: var(--ink); font-family: var(--body); }
+#scene-unused { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; filter: contrast(1.07) saturate(1.1); }
+.vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 50%, rgba(12, 9, 6, 0.55) 100%); }
+body { cursor: pointer; -webkit-user-select: none; user-select: none; }
+body.idle { cursor: none; }
+.slide {
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(1040px, calc(100% - 48px)); box-sizing: border-box; text-align: center; pointer-events: none;
+  padding: 0;
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.slide.out { opacity: 0; transform: translate(-50%, -46%); }
+.slide h1 {
+  font-family: var(--display); font-weight: 700; font-size: clamp(34px, 5.4vw, 92px); line-height: 1.02;
+  margin: 0; letter-spacing: 0.01em; text-wrap: balance;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.8), 0 2px 4px rgba(0, 0, 0, 0.7);
+}
+.slide h1::after { content: ""; display: block; width: 76px; height: 3px; background: var(--grana); margin: 0.38em auto 0.5em; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }
+.slide.cover h1 { font-size: clamp(48px, 9vw, 150px); }
+.slide.cover p { font-size: clamp(22px, 3vw, 48px); }
+.slide p:empty { display: none; }
+.slide p {
+  font-size: clamp(18px, 2.15vw, 36px); line-height: 1.45; margin: 0 auto; max-width: 40ch;
+  text-wrap: pretty; font-weight: 500;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.85), 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+@media (prefers-reduced-motion: reduce) { .slide { transition: none; } }
+</style>
+<style>
+/* Fondo: foto fija de la toma actual + video de la transición encima */
+.bg { position: fixed; inset: 0; overflow: hidden; background: #1d1814; }
+.bg img, .bg video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform-origin: 50% 50%; }
+.bg video { opacity: 0; }
+.bg video.on { opacity: 1; }
+.bg .layer { position: absolute; inset: 0; transform: scale(1); transition: transform 1.2s ease; }
+.bg .layer.hold { transform: none; }
+@media (prefers-reduced-motion: reduce) { .bg .layer.hold { transform: none; } }
+</style>
+
+<div class="bg" aria-hidden="true"><div class="layer" id="layer"><img id="still" alt=""><video id="vid" muted playsinline preload="auto"></video></div></div>
+<main class="slide out" id="slide" aria-live="polite">
+  <h1 id="stitle"></h1>
+  <p id="stext"></p>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const slides = [
+    { title: "Los zapotecas", text: "", cover: true },
+    { title: "Ubicación geográfica",
+      text: "Se desarrollaron principalmente en los Valles Centrales de Oaxaca, aunque también ocuparon otras regiones del estado." },
+    { title: "Periodo",
+      text: "Su civilización se desarrolló aproximadamente desde 500 a. C. hasta 900 d. C., aunque los pueblos zapotecas continuaron existiendo después." },
+    { title: "Ciudades principales",
+      text: "Sus principales centros fueron Monte Albán, Mitla, Yagul, Zaachila y San José Mogote. Monte Albán fue su principal centro político y religioso." },
+    { title: "Organización social y política",
+      text: "Tenían una sociedad jerárquica, dirigida por gobernantes y sacerdotes. Debajo de ellos estaban artesanos, comerciantes y agricultores." },
+    { title: "Economía",
+      text: "Su economía se basaba principalmente en la agricultura, especialmente el maíz. También practicaban el comercio, la artesanía, la caza y la pesca." },
+    { title: "Religión",
+      text: "Eran politeístas y adoraban dioses relacionados con la naturaleza. Cocijo, dios de la lluvia y el rayo, era uno de los más importantes." },
+    { title: "Aportaciones culturales",
+      text: "Desarrollaron uno de los sistemas de escritura más antiguos de Mesoamérica, además de calendarios, arquitectura monumental, cerámica y esculturas." },
+    { title: "Elementos distintivos",
+      text: "Destacan Monte Albán, las urnas funerarias, la escritura zapoteca, las inscripciones en piedra y el culto a Cocijo. También son conocidos como benizáa, “gente de las nubes”." },
+    { title: "Xquixhepe' lii", text: "(Gracias)", cover: true }
+  ];
+  const IMGS = ["https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__7/image-feb77501-4a67-450a-aed3-ced6358ed22e.png?Expires=2106061904&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=Bo96D-sy5-Fa-XnVseemw3XNSl3GyzY1a1572wK5wLFweHuv0IQfhe666-LdZ1R5bnaqiZH5ZxmyCBIy6giw9ACsFjTrNiuyvH2cV6Eeyjyws~2wQ8qmRDGn~pvyJ64REk0sOCFiNZPxkjNmCYVWMDVl0zD0nIGoLvyQNB3rAWNMC0dISa2BQeZyayGk-6AJ00MhKuqDx82x2z6TluPnk6tEzIfHEZHfQ9CeI2CGmoxib7f9YHQKKzPRKPL3SwoKeFqkCt-7NDTUKFwpGMkkL1xqUy7pYCu6hEoPSqkAj3PyyYJU-ojcrZAczAsANmmfVOE53zJI27hMBbI~b8oJyg__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__2/image-60fa1ab7-0533-4054-a08f-37dc7c7619e0.png?Expires=2106063644&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=GCI27VNR~lsZcNFneUfW9Q4qFr1npOTYQH5hkUvdFHwa9uKLgKueUzxNTT6Ug-t0u5QWDvKplhjgE5V4rHlmvqJsfnvytOORLpyqL0brKHu4l3EXYdWCqrFet8Ur~crDGmrpIocC9UHIboYCBsSotf5O39CxrxGcIcfUc408XUgZZCdOG60Sm353OHSNDsEh0-N7XozZupRGw6faZx1m6-0xaIS9HhxVd70pmy9zZxBKf0WP1LedFaHRQoJa1E4mR5TI7kKcyO9sLtA9LMvkdPHlOjKz0ZRih7x4k-WpPzAEnGKTv4U1-aGETTZaJZU5Vc3~~JWIJu8QXe0Yk-mpyA__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__9/image-c909f94a-d42b-4819-ac7c-7c5e9fd3cfac.png?Expires=2106063649&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=AcBpL0YmkwRD8cNOgm50wlYYbOpFziLyp82PSiYlhSqo82kFiHnMWftAZNwuhWbjiH6aNX2DfbgB1dc7tieFMAL7udYbvT956p7P2NRQ1dIU9EHpCmpZ1LDLorRLhdx7SrSjp2b3uNuqfAybYHn69j06A2~ncgndBTq6-36MTffmm5o71ZdIRi0~W7p20o~kYpfONc0VNISLChv8V115IkL-iDOHv3A06ge8sxm~lWGdy8~szp~fEDcHHWiP6BRT0vcy4t3W~MnNLIB~a-LmMxN8KZ-ZIp~R37Nk~hiJwGWCcusMxJIxVB1EoCjY~lZ1XYRZrBEPcx7FfxGGVKVDpg__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__1/image-e3c66128-6ba4-447a-80db-0e3a1eb5cb2d.png?Expires=2106063649&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=PsYLz5FAEPO5roLW7eRTAWcojUKM2oe~vq1EhyX-e8hR8NklLq~foPiH3b3sazPklyFQDQBe529puvhrvVCmCyEEeRW41sIr0Tj2okX-HYCAo3SNMRk7pTV5THBAu4VQnepW-ejg4DoUbjn9dIYvHjmy-sQpW0m7-iAdQlwwW12P69h~w2kUnK4tYZ6ZLWpqvv1KKHwHAHyY4SQSLpOf81q8xPI57vSFEU0Svut1LXTR8AdncLfvcmXk-17N9cdF4xda4ovsVbzxYm1Mtb3~j53cbajJ7BDBc9kJfxN0B1zGd7KN16Vy-28kA1G0DPhQ0omtm2Lb7drQNNkHVtz1gg__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__7/image-3c17f9b0-a19f-4580-9f24-2015c3ef61e6.png?Expires=2106063652&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=nxTsovQAJq-UozXY~jroFlpu2aZkFpeFFbuvfOJmVnhUAGb5OCDfm2dg0hqBaMyj5823YmRqu7zl1SXDI6Zlcb7OfWoABzwXSxBgLrHVanc6eY0kCkB81DI8B5RlwWhJRb2nvHri-dDiUUSxgzObE2QYZC7VKxzugfzckLbc4iTdPr29CCoOZ0brrJUOobXOyy6rQLgKhVnLrG69vluKbAd4~U6chCOGtR0VfWSc-rGZlN-mdaxE9FrcwT~gVyv8lygn6IRFM2zv4TbR14rKZ1NU-BMO6yp~BYkrkPmf2S~hOfnul0u4FmhzcDOBsytKBV~H3dOHbsY9LRIRjqyGWw__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__1/image-738d9205-020b-4a7c-95fc-13f0c3711c90.png?Expires=2106063655&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=IMwtgWVPsNBg0A8Y7Q4j6CTvjZ8rNuslURS-LPNXn~keHgeOVWMoUbZtB2IGPr5uKeXtecyGtGAv0wwvWLqJKzRDqfSWSEa0N1BJSUTyFrjRzBwgOTNAI5MNG-QZSdXDrMzGQN~SNmG00WsCfLsIBai2JTYUBDYkT4uyIlg2a9VA-uExMwPFDUMOr8N4l~yu7V2xwfrmM4YI0y1wLVuQsg04z~w~tM9GUNs~wkAzop07jclMOKDtT9kofAiwt~z5c010g3R2yE61Eiy7F0qHuTqhyHXz-CaPjHVUjfG9byHukhJj4zFJpyEfO92vAebhuDpvd5N-NDQqnqrJ2hwdkQ__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__2/image-e054cf9d-16dd-4ea4-bd86-a7c3d2a8df7c.png?Expires=2106063659&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=ZsJQMY~FIF7K~i-2~msgmBPljUtGwOAdri2828oZ6aLNNc3wUbV1~puxLv2Ji1n~74K68oVNOPnuPp0449NtsIzPiAkM-b~y-tAMmG048rSfl4W3xhf3Ydp2HINY~jvtx2mY1XZHvlE9pwp1PMJ5ZAiJKltdiHc4nip20SkjpB8at-mUII54c286K4T1Z1S66X9LhYyZRPqVLKSPQhMvJWOCvHEr1qsG1RFY-4fMbxKd~VD0A7YlTgSMF1SVgFR3Z-eF9w0pPd8jGF0vgIgw28KBTXjR1HbQkB1TInCArAEBWBMSscxwu11~XwxiLA0cZl57UTTuCcVCiGnWl5mISw__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__3/image-5f8a94c1-af81-4798-b8db-45d7ef60343b.png?Expires=2106063661&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=Fgp3JZR4CVfapNI2pDq-xvkza5w~K-4hb5haVSf9H8AbvKlVYNQ9u25vHhM5fCOV9dWzvisBOcQKwrDtzL7sYsTBZkNkc12RmWK1dNCByCueDYGbwHBsz-V8HhYJFPAXgYbehuesQyTd6K03LbizNswOJVeSskgl1qg2GesR4ADW0JVtU3KDW-YsyKf4cDk~M1vhxU0VvJHwY0sLLgwgugRBPo2q5bj7rjqMIRo6akgpl5IdTjHToYgvZbKd~2-BavcjKIofCB62CMyf-I0872DuMSuVV3Ii~tsi5t3npUrz85tP-9Y8W0GjBL98D8pljlVjKBw2jN6mazVgYIzn9A__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__6/image-a8678a9c-6c58-4033-8c91-7d8f5b3d758d.png?Expires=2106063664&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=NVyXu1lIEwrPKY9vTBwg5Zgh4LmgqHRNpkfIKBD7uJNHSM-6C8JHAGHdPcrs-Yw24wdqnZJwwvlyAQV88ZZOTeyS3o4T5ee-qf13jM7EA88HTkibqjXoJSKbsjrfCTAKO4G1C0LRttv6I04ZMnGU7I9nuZ0CoNQ434D7rmXMqm4WrLc3T0Lz7wcZGbmJhZQc3bdwTxtWWRvPJPmGufvzGlr4lAybsxdITbLAzPhFjbPVtgyfT0PdJ~GsO~sMr9B2mzEsrBRnufx2FRmq1rBc~mDwwNRw6L8ok~KEia4hCU1sOrQ4~neDSFwgMLsypnlqYunzLKgvn-g3K686JNtdAQ__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__4/image-f2d6a79e-1a45-43f1-9193-8c2e41cf767b.png?Expires=2106063664&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=zzxhGPm8S7XS~d~UMPTrgwNMUQueI7Rk5y18EJcQC1ZZuNZ2ZGcRwxI2k5haphTOOFNr~kt4QDCkfnC1dmbe6d-KsWSwf47Tu~7md1bWUcjIbYhZMLnl2WiPwfUpsCrkZpD6ws0Or-vj7drdzqMyuAy59MobAN1aLAVDieSrV5KhSJcMI6Q~CKFBqxIi8uO4wQfwCIPJHiuWZBeR3KHqKJaJjmB7N5gACCYBCXMkI~KnzcLMAYI5Xq41ODd2jr1UTm0dRhre1jbSjttMtdH9JcICjFnCPt5JcKGHQ~l9-gYLBtGuzW1dChZz0ofkRNhAoJxBBjUAi0GwOBFyg1aM4Q__"];
+  const VIDS = ["https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__7/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-a21a0828-b36d-4e4b-b11a-a6b2d6079bce.mp4?Expires=2106065264&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=gTrLm3F1a2lCBwFWxYvM8XQZiKGE7RkXmb0Xmp19wUEosYyYX~vSJUHdNHlG9T-3x-O8GVtQk7RQi0NcU4eMXbyuBXHHVX8hogwKMHjg4rBUT6bunt2v~-~qBGNZjKk8u1gpuZqStzdhoE3R0dGUc~P-kdakzN1PjVYdtkuMPgRNYIFjoMMuhjE2OK0UoH1K5jYd7I-EZEv8gqo-Hs~~rp5Y6be~xGKDA0Gs2MG9nKv5NuWI2mFUX~e4rWbvsCWAT-wibRwmYsOz5e6PjibQ5K2ObUdVayF0TRhqGNrceuBpcb0ZWKh30si9vgAnSuRwxZEqsFNXjiQ8DDkcblNoNw__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__9/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-16200dcc-bfbb-4ae0-9d34-83ad716bfc7d.mp4?Expires=2106065268&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=V19UVthlq5S8ZewiiXUeVReuR4KpvekhFi1P-ekRgKvU3qHOIPboVW3VFDq2QE~sAaOHE2JBjSCFBMqy~ljPEmPps9KK6sQjuHot-PE4vk0FQAX8Uz2z3JUJBj8JLJN3nRjFmRmNtnOayXY22RZItHozxzQa0sSJwF1A8azPZyFfTtcCzWUGXFf3I-ZTWJt3rTzEoBosmCejsv9yetKiY40zp6da4orO-gMIvkhovGZ5ku9haxi-qXPHdSPDpiTNaYyQ9~imfkCm4RNH5i8UbFkbzVO-7xWZs01Dbyil4JGVvcL3stuIe~QjW3UI~FZH5YI5uJ2ZxoO8DkA2P1Xh2A__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__8/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-5cdddd74-9ad7-48c5-86fc-755548694719.mp4?Expires=2106065264&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=welKlmYnz6BHjcaQlAG3ud2yioSdFGC28Bh1wzk3HH47fVdBUbu2bkGeoETkzaLBDcQVbRJnDAh6Rs9yiv5jbSI4PNDJqq5ajGDuFXbU92K7FjIAPxz9SC2cJp35RM2vK4AFwbxdOzVqm9zPHHkpVI4Exu2fQMKg64KnVhCgNTuJHPQNXpWhDTcovsHLV9vMEltDBbR6yjMeqMR8cgU6YdedoGKB6Dr0n~DS7m2Nooip8DDlfNsqhuU72~uBe7hBptlNamf17aaVxa5r2Y4MXOVFSy8TFRg~NW5iDBko-IHWye4yvCbNjj~KJ4cGgMZVilycsOYorZvk7VKVTkdRHQ__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__2/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-49e64142-3491-4078-95c8-13a21c3a30a0.mp4?Expires=2106065264&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=2NjnlaouW67z~K-auf6y39qmlDnz0Ns854lVsP9cDJAa45ZAA~vUd8EElNJLn5KGMRKG3XC1B-moDc62z7pli2e72NHYFOX87QA3X-MHRRNvOibkkWqJkeV3UDIkW6~5yhIiu3hTpgkltM5CtX0xJNHHmpwwlwq0WgzWq6FimtlEjQU29Bwa872c37wywenuF8jzyx7NrHgwrPSZfh0zuT-OZIgTTxHM6KvqQfX3U8UOwZVaaedO1kM5GpP1ftqpqFYHxZ8YnhYYJRWQPbghghA~23p1tLG5PmqwlKG~E7TNRCXjVnu3wExKxk3TSDO1yKqTrW4vV~MtJdInQgsc0Q__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__5/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-3a597d6f-769a-429c-8c05-61bac432324f.mp4?Expires=2106065264&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=XMgguEqwNKG~KWh0gHSm7yMHu3KXZtbydrKRVcTeoGZZXaD~6pWpgPevRGfB265--gT9b8V5N~-bMtiqG2MaCydlktvgACDtzb~IF7ME-8OoO9ygPiQY0Tsll9ThztjPNTGklH9eXh1pOUUjP9nBgF92~v6jw~W0EYbUsEl6T-Fk-Xnef-kLfFyjJ3iVwf5-KCS7N9A4f4YgATK768MsVoFOQggsxPYC7-ZlWloRxrNBU6o19oOt7l1AF00T0VB2Yd0Xt-w7TZ~4qZdYCqrV~Cuo0ti6pTXzpUWx16jKNvkSfCZ5VHD56CWdGBkZByp8K9UkJ6vtqiCdbizDkIUFUA__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__4/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-6fac0f82-08f9-45fa-84cf-2b58e6fc2ae1.mp4?Expires=2106065270&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=erKHqvJjI4IbpSEC4P2cJkESoRbbp~M6y13R8Bm8Yd3uqRehtjJkyn55NMUKrfYVOxLm0HlB3NnOFKeat92gvDIf847FCfa1jsJHp9S7IZlmZjY0~ieZzUQsUYXnjofKl5qBqYIwIWcV7YnaPgQAmtcYHZFHEVP0kKPEe52jOG4dh9WLrl9IhN7qbsWvFLocjt-Ao8cf4IR7YveQh97F-XvfzCzQrSOHbNbxuiEYw-J9NIOFM~DDI6FXLPvU9wo7EpJ8LxINfdoXyaSsjtXv51gxp9XiOSPPqfRP~Obl56T9IWOBAJfsVdLsih5gTzdOvB4Tjbl734OJo8K17H0ChA__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__2/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-b1be282c-9541-48f5-8758-11295a08ce13.mp4?Expires=2106065268&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=wyZlTeesEGgB5~c~9Y132L65yAs4Zbk3z55MUllTde5Tz5m6ZboD~mtem4cMTku6hHzN5GbJVxiOlfB~iD7VDgWTs~ZvbicqzRKY0W6ymdtDC0ufRXRjKaLbbZfixJOSsUkQ3i7YT-GfE~~Dn2s0K0h9EXE4xPOeKrLs-ZN9dPhbj6mZD5A1vjt8wIkWRJkBxzRKkFtBXnZZEI60byc~W7SHjbP1D8CSAdSLzbn1pTGJao2KAeHrp8GY9szePZ2yOjRCsQeBi6I8FWbup6QuTcU~Ub1UjhFA7H-lVlgwgg7iM757HX7NQvQeikcVCpCXtnd6S-HDxTEqdyx6VSgoZA__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__8/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-a29fcdea-4d56-41e3-bd29-b4d077581c0a.mp4?Expires=2106065276&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=NoxC7yR41UD0JN7cFD86veyYciinEIdnQYKfQpaBRhSxt4Vb~2NjgBk1VOpGOOsl0PO5pdT2H-7d1DQzbLeTpo0wskJk32gsMRXZX11VQVWAGmsexOv04wl-0KPSO4VP66odiyT9ibw1g4wFhSaKmVXyW~nXAYNWzv-tVsNvZgJQ3nwRvlPoVf4crbGo-oXRw4qjCX7YzclJuCkVrdYSabnuE--BhGDKZ5vzWNK4MWn1TXCMzHUTSZYR5J5LhfhEESyW-jaMpTFjJOH45~~RSksioBGO2adKOKwNpb9lclXpK4qqAYxTMS~RigoN7Bv-eGyQCSrvjJP332VuJLX4YQ__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__8/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-1c15f04e-098d-482a-8149-71e6b9cc74d6.mp4?Expires=2106065274&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=Uw821zFn6D4I-m5WPGpKASxApPIIemntPcmrMFK4hecJP40-FXJk8IOiNItwwh2zLLff0XZhnBpg8HkKs5LBg4MZDDmxOdAi9QGlKcZTiyHYY4iaPKsyimYZiE78WwO9~nIyLytSFa0KkLabbak29YYgxri23kVQQqRTgfnuVlx6SvuhvMfkZINRwoVCSTrwpQHhjrKrAIYyjI1Ajd~Iscrwc69mb45WC2QBIDDl0NPMhxjdo633eheFazyNiqZLl7BbYj0H0TZo600FhrJEgm87oZABXBmB6DpRqTG~Q9m5E06K-cnhLWNRLiv3346epYQBiZGpSejRK86FgL6yvA__"]; // VIDS[k]: vuelo de la toma k a la toma k+1
+  const $ = (id) => document.getElementById(id);
+  const slideEl = $("slide"), still = $("still"), vid = $("vid"), layer = $("layer");
+  let cur = 0, swap = 0, busy = false;
+  // precargar fotos y videos
+  IMGS.forEach((u) => { const i = new Image(); i.src = u; });
+  const pre = VIDS.map((u) => { const v = document.createElement("video"); v.muted = true; v.preload = "auto"; v.src = u; return v; });
+  function show(i) {
+    slideEl.classList.add("out");
+    clearTimeout(swap);
+    swap = setTimeout(() => { $("stitle").textContent = slides[i].title; $("stext").textContent = slides[i].text; slideEl.classList.toggle("cover", !!slides[i].cover); slideEl.classList.remove("out"); }, 650);
+  }
+  function hold() { layer.classList.add("hold"); }
+  function setStill(i) { still.src = IMGS[i]; vid.classList.remove("on"); }
+  function go(i) {
+    if (i < 0 || i >= slides.length || i === cur) return;
+    const fwd = i === cur + 1;
+    layer.classList.remove("hold");
+    show(i);
+    if (fwd && VIDS[cur]) {
+      const from = cur;
+      vid.src = VIDS[from]; vid.currentTime = 0;
+      vid.onended = () => { still.src = IMGS[i]; hold(); };
+      vid.onerror = () => { setStill(i); hold(); };
+      vid.play().then(() => vid.classList.add("on")).catch(() => { setStill(i); hold(); });
+    } else { setStill(i); setTimeout(hold, 50); }
+    cur = i;
+  }
+  window.addEventListener("pointerup", (e) => { if (e.button === 0) go(cur + 1); });
+  window.addEventListener("contextmenu", (e) => { e.preventDefault(); go(cur - 1); });
+  const fullscreen = () => { try { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); } catch (e) {} };
+  window.addEventListener("keydown", (e) => {
+    if (["ArrowRight", "PageDown", " ", "Enter", "ArrowDown"].includes(e.key)) { e.preventDefault(); go(cur + 1); }
+    else if (["ArrowLeft", "PageUp", "ArrowUp", "Backspace"].includes(e.key)) { e.preventDefault(); go(cur - 1); }
+    else if (e.key === "f" || e.key === "F") fullscreen();
+  });
+  let idle = 0;
+  window.addEventListener("pointermove", () => { document.body.classList.remove("idle"); clearTimeout(idle); idle = setTimeout(() => document.body.classList.add("idle"), 2500); });
+  still.src = IMGS[0];
+  $("stitle").textContent = slides[0].title; $("stext").textContent = slides[0].text; slideEl.classList.add("cover");
+  requestAnimationFrame(() => { slideEl.classList.remove("out"); hold(); });
+  void pre;
+})();
+</script>
+
+</html>
