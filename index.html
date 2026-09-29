@@ -23,7 +23,7 @@
   color-scheme: dark;
 }
 html, body { height: 100%; margin: 0; overflow: hidden; background: var(--ground); color: var(--ink); font-family: var(--body); }
-#scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; filter: contrast(1.07) saturate(1.1); }
+#scene-unused { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; filter: contrast(1.07) saturate(1.1); }
 .vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 50%, rgba(12, 9, 6, 0.55) 100%); }
 body { cursor: pointer; -webkit-user-select: none; user-select: none; }
 body.idle { cursor: none; }
@@ -50,867 +50,90 @@ body.idle { cursor: none; }
 }
 @media (prefers-reduced-motion: reduce) { .slide { transition: none; } }
 </style>
+<style>
+/* Fondo: foto fija de la toma actual + video de la transición encima */
+.bg { position: fixed; inset: 0; overflow: hidden; background: #1d1814; }
+.bg img, .bg video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform-origin: 50% 50%; }
+.bg video { opacity: 0; }
+.bg video.on { opacity: 1; }
+.bg .layer { position: absolute; inset: 0; transform: scale(1); transition: transform 1.2s ease; }
+.bg .layer.hold { transform: scale(1.06); transition: transform 24s linear; }
+@media (prefers-reduced-motion: reduce) { .bg .layer.hold { transform: none; } }
+</style>
 
-<canvas id="scene" aria-label="Maqueta 3D interactiva de la Gran Plaza de Monte Albán"></canvas>
-
+<div class="bg" aria-hidden="true"><div class="layer" id="layer"><img id="still" alt=""><video id="vid" muted playsinline preload="auto"></video></div></div>
 <div class="vignette" aria-hidden="true"></div>
 <main class="slide out" id="slide" aria-live="polite">
   <h1 id="stitle"></h1>
   <p id="stext"></p>
 </main>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
 <script>
 (function () {
   "use strict";
-  const reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const LOW = location.hash === "#ligero" || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || Math.min(innerWidth, innerHeight) < 700;
-  const Q = LOW ? { tufts: 18000, near: 3500, far: 2500, shadow: 2048, dpr: 1.25 } : { tufts: 140000, near: 15000, far: 14000, shadow: 4096, dpr: 2 };
-
-  // ---------- Renderer / cámara ----------
-  const canvas = document.getElementById("scene");
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  let dpr = Math.min(window.devicePixelRatio || 1, Q.dpr);
-  renderer.setPixelRatio(dpr);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.outputEncoding = THREE.sRGBEncoding;
-
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(50, 1, 1, 60000);
-  const controls = new THREE.OrbitControls(camera, canvas);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.maxPolarAngle = Math.PI * 0.485;
-  controls.minDistance = 12;
-  controls.maxDistance = 3000;
-  controls.autoRotateSpeed = 0.35;
-
-  // ---------- Ruido ----------
-  function hash(x, y) { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); }
-  function vnoise(x, y) {
-    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
-    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
-    const a = hash(xi, yi), b = hash(xi + 1, yi), c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1);
-    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
-  }
-  function fbm(x, y, o) { let s = 0, a = 0.5, f = 1; for (let i = 0; i < (o || 5); i++) { s += a * vnoise(x * f, y * f); f *= 2.03; a *= 0.5; } return s; }
-  const sstep = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
-  let seed = 7;
-  const rand = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
-
-  // ---------- Terreno: meseta nivelada + laderas + valle + sierra ----------
-  // x = este, z = sur. La Gran Plaza está centrada en el origen.
-  function plateauDist(x, z) {
-    const dx = Math.max(Math.abs(x) - 150, 0);
-    const dz = Math.max(z < 0 ? -z - 280 : z - 262, 0);
-    return Math.hypot(dx, dz);
-  }
-  function terrainH(x, z) {
-    const d = plateauDist(x, z);
-    let h = (fbm(x / 35, z / 35, 3) - 0.5) * 0.5;
-    if (d > 0) h += (fbm(x / 120, z / 120, 3) - 0.5) * 3 * sstep(0, 60, d) - 0.6 * sstep(0, 20, d);
-    return h;
-  }
-
-  function lin(hex) { return new THREE.Color(hex).convertSRGBToLinear(); }
-  const C = {
-    grass: lin("#9e8c63"), grass2: lin("#86825a"), dirt: lin("#b09d7a"),
-    scrub: lin("#7c7445"), scrub2: lin("#5d6639"), forest: lin("#4c5530"), valley: lin("#a08f68"), field: lin("#77804d"), rock: lin("#8a7f68")
-  };
-
-  function buildTerrain() {
-    const rings = [0];
-    let r = 3;
-    while (r < 26000) { rings.push(r); r = r * 1.052 + 2.5; }
-    const seg = 512;
-    const pos = [], col = [], idx = [], uvs = [];
-    const c = new THREE.Color();
-    for (let i = 0; i < rings.length; i++) {
-      for (let j = 0; j < seg; j++) {
-        const a = (j / seg) * Math.PI * 2;
-        const x = Math.cos(a) * rings[i], z = Math.sin(a) * rings[i];
-        const h = terrainH(x, z);
-        pos.push(x, h, z); uvs.push(x / 5, z / 5);
-        const d = plateauDist(x, z);
-        const n = fbm(x / 22, z / 22, 3);
-        if (d < 25) {
-          c.copy(C.grass).lerp(C.grass2, sstep(0.35, 0.7, n));
-          if (fbm(x / 9 + 40, z / 9, 2) > 0.62) c.lerp(C.dirt, 0.6);
-          c.lerp(C.scrub, sstep(0, 25, d));
-        } else {
-          c.copy(C.scrub).lerp(C.scrub2, sstep(0.3, 0.7, fbm(x / 60, z / 60, 3)));
-          c.lerp(C.forest, 0.7 * sstep(0, 250, d));
-        }
-        col.push(c.r, c.g, c.b);
-      }
-    }
-    for (let i = 0; i < rings.length - 1; i++) {
-      for (let j = 0; j < seg; j++) {
-        const a = i * seg + j, b = i * seg + ((j + 1) % seg), c2 = (i + 1) * seg + j, d = (i + 1) * seg + ((j + 1) % seg);
-        idx.push(a, b, c2, b, d, c2);
-      }
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-    g.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
-    g.setIndex(idx);
-    g.computeVertexNormals();
-    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map: groundTexture(), vertexColors: true, roughness: 1, metalness: 0 }));
-    m.receiveShadow = true;
-    scene.add(m);
-  }
-
-  // ---------- Textura de suelo (pasto seco, tierra, guijarros) ----------
-  function groundTexture() {
-    const S = 1024, cv = document.createElement("canvas"); cv.width = cv.height = S;
-    const g = cv.getContext("2d");
-    g.fillStyle = "#b8b3a4"; g.fillRect(0, 0, S, S);
-    const wrap = (fn) => { for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) fn(ox, oy); };
-    for (let i = 0; i < 90; i++) {
-      const x = rand() * S, y = rand() * S, r = 30 + rand() * 90, l = 62 + rand() * 20;
-      wrap((ox, oy) => { g.fillStyle = `hsla(35,18%,${l}%,0.35)`; g.beginPath(); g.ellipse(x + ox, y + oy, r, r * 0.7, rand() * 3, 0, 7); g.fill(); });
-    }
-    g.lineCap = "round";
-    for (let i = 0; i < 26000; i++) {
-      const x = rand() * S, y = rand() * S, len = 5 + rand() * 12, a = -Math.PI / 2 + (rand() - 0.5) * 1.6;
-      const l = 45 + rand() * 50, hue = 38 + rand() * 30;
-      g.strokeStyle = `hsla(${hue},${18 + rand() * 20}%,${l}%,0.8)`; g.lineWidth = 0.8 + rand() * 1.2;
-      wrap((ox, oy) => { if (x + ox < -20 || x + ox > S + 20 || y + oy < -20 || y + oy > S + 20) return; g.beginPath(); g.moveTo(x + ox, y + oy); g.lineTo(x + ox + Math.cos(a) * len, y + oy + Math.sin(a) * len); g.stroke(); });
-    }
-    for (let i = 0; i < 1400; i++) {
-      const x = rand() * S, y = rand() * S, r = 1 + rand() * 3.5, l = 55 + rand() * 35;
-      wrap((ox, oy) => { if (x + ox < -8 || x + ox > S + 8 || y + oy < -8 || y + oy > S + 8) return; g.fillStyle = `hsl(30,8%,${l}%)`; g.beginPath(); g.arc(x + ox, y + oy, r, 0, 7); g.fill(); });
-    }
-    const t = new THREE.CanvasTexture(cv);
-    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = renderer.capabilities.getMaxAnisotropy(); t.encoding = THREE.sRGBEncoding;
-    return t;
-  }
-
-  // ---------- Relieves de Los Danzantes (atlas 2×2) ----------
-  function carvedTexture() {
-    const W = 512, H = 768, cv = document.createElement("canvas"); cv.width = W; cv.height = H;
-    const g = cv.getContext("2d");
-    for (let q = 0; q < 4; q++) {
-      const ox = (q % 2) * 256, oy = Math.floor(q / 2) * 384;
-      g.fillStyle = `hsl(${36 + rand() * 8},12%,${52 + rand() * 6}%)`; g.fillRect(ox, oy, 256, 384);
-      for (let i = 0; i < 1800; i++) { g.fillStyle = `rgba(60,50,40,${rand() * 0.18})`; g.fillRect(ox + rand() * 256, oy + rand() * 384, 2, 2); }
-      const cx = ox + 128 + (rand() - 0.5) * 30, hy = oy + 90, tw = (rand() - 0.5) * 60;
-      const arms = [0, 1].map(() => [50 + rand() * 40, 40 + rand() * 80, 40 + rand() * 60, rand() < 0.5 ? 10 : 140]);
-      const legs = [0, 1].map(() => [40 + rand() * 50, 200 + rand() * 60, 20 + rand() * 80, 260 + rand() * 20]);
-      const figure = (dx, dy, col, wBody, wHead) => {
-        g.strokeStyle = col; g.fillStyle = col; g.lineJoin = g.lineCap = "round";
-        g.lineWidth = wHead; g.beginPath(); g.arc(cx + dx, hy + dy, 30, 0, 7); g.stroke();
-        g.lineWidth = wBody;
-        g.beginPath(); g.moveTo(cx + dx, hy + 34 + dy); g.bezierCurveTo(cx + tw + dx, hy + 90 + dy, cx - tw + dx, hy + 140 + dy, cx + tw * 0.5 + dx, hy + 190 + dy); g.stroke();
-        [-1, 1].forEach((sx, k) => { const a = arms[k]; g.lineWidth = wBody * 0.6; g.beginPath(); g.moveTo(cx + dx, hy + 60 + dy); g.quadraticCurveTo(cx + sx * a[0] + dx, hy + a[1] + dy, cx + sx * a[2] + dx, hy + a[3] + dy); g.stroke(); });
-        [-1, 1].forEach((sx, k) => { const l = legs[k]; g.lineWidth = wBody * 0.7; g.beginPath(); g.moveTo(cx + tw * 0.5 + dx, hy + 190 + dy); g.quadraticCurveTo(cx + sx * l[0] + dx, hy + l[1] + dy, cx + sx * l[2] + dx, hy + l[3] + dy); g.stroke(); });
-      };
-      figure(4, 4, "rgba(40,33,26,0.75)", 30, 14);    // sombra del relieve
-      figure(-3, -3, "rgba(235,225,205,0.55)", 28, 12); // luz del borde
-      figure(0, 0, `hsl(${36 + rand() * 8},12%,${60 + rand() * 6}%)`, 24, 10);
-      g.strokeStyle = "rgba(40,33,26,0.7)"; g.lineWidth = 3;
-      g.beginPath(); g.moveTo(cx - 12, hy - 4); g.lineTo(cx - 3, hy - 2); g.moveTo(cx + 5, hy - 2); g.lineTo(cx + 14, hy - 4); g.moveTo(cx - 9, hy + 14); g.quadraticCurveTo(cx, hy + 20, cx + 9, hy + 14); g.stroke();
-      for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(60,50,40,${rand() * 0.2})`; g.fillRect(ox + rand() * 256, oy + rand() * 384, 3, 3); }
-      g.strokeStyle = "rgba(50,42,34,0.5)";
-      g.lineWidth = 4; g.strokeRect(ox + 10, oy + 10, 236, 364);
-    }
-    const t = new THREE.CanvasTexture(cv); t.encoding = THREE.sRGBEncoding; t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    return t;
-  }
-
-  // ---------- Textura de piedra (sillares irregulares, tileable) ----------
-  function stoneTextures() {
-    const S = 1024;
-    const mk = () => { const c = document.createElement("canvas"); c.width = c.height = S; return c; };
-    const cv = mk(), hm = mk();
-    const g = cv.getContext("2d"), h = hm.getContext("2d");
-    g.fillStyle = "#5b5344"; g.fillRect(0, 0, S, S);
-    h.fillStyle = "#141414"; h.fillRect(0, 0, S, S);
-    for (let i = 0; i < 9000; i++) { g.fillStyle = `rgba(${40 + rand() * 60},${36 + rand() * 50},${28 + rand() * 40},0.5)`; g.fillRect(rand() * S, rand() * S, 3, 3); }
-    const rows = []; let tot = 0;
-    while (tot < S) { const rh = 46 + rand() * 90; rows.push(rh); tot += rh; }
-    const k = S / tot; let y = 0;
-    const stone = (x0, y0, w, hh, fill, lum) => {
-      const pts = [], j = Math.min(w, hh) * 0.12, ins = 4 + rand() * 3;
-      const cs = [[x0 + ins, y0 + ins], [x0 + w / 2, y0 + ins], [x0 + w - ins, y0 + ins], [x0 + w - ins, y0 + hh / 2], [x0 + w - ins, y0 + hh - ins], [x0 + w / 2, y0 + hh - ins], [x0 + ins, y0 + hh - ins], [x0 + ins, y0 + hh / 2]];
-      cs.forEach(([px, py], i) => pts.push([px + (rand() - 0.5) * j * (i % 2 ? 0.6 : 1.4), py + (rand() - 0.5) * j * (i % 2 ? 0.6 : 1.4)]));
-      const path = (ctx) => {
-        ctx.beginPath();
-        const m0 = [(pts[7][0] + pts[0][0]) / 2, (pts[7][1] + pts[0][1]) / 2]; ctx.moveTo(m0[0], m0[1]);
-        for (let i = 0; i < 8; i++) { const a = pts[i], b = pts[(i + 1) % 8]; ctx.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2); }
-        ctx.closePath();
-      };
-      path(g); g.fillStyle = fill; g.fill();
-      const gr = g.createRadialGradient(x0 + w * 0.4, y0 + hh * 0.35, 2, x0 + w / 2, y0 + hh / 2, Math.max(w, hh) * 0.7);
-      gr.addColorStop(0, "rgba(255,248,230,0.16)"); gr.addColorStop(1, "rgba(30,24,16,0.35)");
-      path(g); g.fillStyle = gr; g.fill();
-      path(h); h.fillStyle = `rgb(${lum},${lum},${lum})`; h.fill();
-    };
-    rows.forEach((rh0) => {
-      const rh = rh0 * k, ws = []; let wt = 0;
-      while (wt < S) { const w = rh * (0.9 + rand() * 2.2); ws.push(w); wt += w; }
-      const kw = S / wt; let x = rand() * S;
-      ws.forEach((w0) => {
-        const w = w0 * kw, hue = 30 + rand() * 18, sat = 5 + rand() * 13, l = 40 + rand() * 26;
-        const fill = rand() < 0.12 ? `hsl(${80 + rand() * 20},6%,${l - 6}%)` : `hsl(${hue},${sat}%,${l}%)`;
-        const lum = 150 + Math.floor(rand() * 90);
-        // pequeñas cuñas entre sillares
-        if (rand() < 0.35) { const cw = 14 + rand() * 18; for (const off of [0, -S]) { g.fillStyle = `hsl(${hue},8%,${l - 10}%)`; g.fillRect(x + off - cw / 2, y + rh * (0.2 + rand() * 0.5), cw, 10 + rand() * 10); h.fillStyle = "#6a6a6a"; h.fillRect(x + off - cw / 2, y + rh * 0.4, cw, 12); } }
-        for (const off of [0, -S]) stone(x + off, y, w, rh, fill, lum);
-        x = (x + w) % S;
-      });
-      y += rh;
-    });
-    // grano, manchas de líquen y escurrimientos
-    const img = g.getImageData(0, 0, S, S), d = img.data;
-    for (let i = 0; i < d.length; i += 4) { const n = (rand() - 0.5) * 30; d[i] += n; d[i + 1] += n; d[i + 2] += n * 0.9; }
-    g.putImageData(img, 0, 0);
-    for (let i = 0; i < 380; i++) {
-      const x = rand() * S, yy = rand() * S, r = 3 + rand() * 20;
-      g.fillStyle = rand() < 0.55 ? `rgba(96,104,66,${0.18 + rand() * 0.3})` : (rand() < 0.5 ? `rgba(225,218,196,${0.15 + rand() * 0.25})` : `rgba(40,32,24,${0.15 + rand() * 0.2})`);
-      g.beginPath(); g.ellipse(x, yy, r, r * (0.4 + rand() * 0.6), rand() * 3, 0, 7); g.fill();
-    }
-    for (let i = 0; i < 60; i++) { const x = rand() * S; const gr = g.createLinearGradient(0, 0, 0, S); gr.addColorStop(0, "rgba(40,34,26,0.18)"); gr.addColorStop(1, "rgba(40,34,26,0)"); g.fillStyle = gr; g.fillRect(x, rand() * S * 0.5, 3 + rand() * 8, S * 0.5); }
-    // relieve: altura suavizada -> mapa normal
-    const hb = mk(), hbx = hb.getContext("2d");
-    hbx.filter = "blur(3px)"; for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) hbx.drawImage(hm, ox, oy);
-    const hd = hbx.getImageData(0, 0, S, S).data;
-    const nc = mk(), nx = nc.getContext("2d"), ni = nx.createImageData(S, S), nd = ni.data;
-    const H = (x, yy) => hd[(((yy + S) % S) * S + ((x + S) % S)) * 4] + (rand() - 0.5) * 6;
-    for (let yy = 0; yy < S; yy++) for (let x = 0; x < S; x++) {
-      const dx = (H(x + 1, yy) - H(x - 1, yy)) / 255 * 3.2, dy = (H(x, yy + 1) - H(x, yy - 1)) / 255 * 3.2;
-      const l = Math.hypot(dx, dy, 1), o = (yy * S + x) * 4;
-      nd[o] = (-dx / l * 0.5 + 0.5) * 255; nd[o + 1] = (dy / l * 0.5 + 0.5) * 255; nd[o + 2] = (1 / l * 0.5 + 0.5) * 255; nd[o + 3] = 255;
-    }
-    nx.putImageData(ni, 0, 0);
-    const max = renderer.capabilities.getMaxAnisotropy();
-    const map = new THREE.CanvasTexture(cv), normal = new THREE.CanvasTexture(nc);
-    [map, normal].forEach((t) => { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = max; });
-    map.encoding = THREE.sRGBEncoding;
-    return { map, normal };
-  }
-
-  // ---------- Constructores de geometría ----------
-  const parts = { stone: [], stair: [], slab: [], plaster: [], carved: [] };
-  const fp = [], tops = [];
-  function regRect(G, x0, x1, z0, z1) {
-    const v = new THREE.Vector3(); let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity;
-    for (const [x, z] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]]) {
-      v.set(x, 0, z); if (G) v.applyMatrix4(G);
-      a = Math.min(a, v.x); b = Math.max(b, v.x); c = Math.min(c, v.z); d = Math.max(d, v.z);
-    }
-    fp.push([a, b, c, d]);
-  }
-  const blocked = (x, z, m) => fp.some((r) => x > r[0] - m && x < r[1] + m && z > r[2] - m && z < r[3] + m);
-  const topTint = [lin("#bba77a"), lin("#a99b67"), lin("#c9b58e")];
-  const white = new THREE.Color(1, 1, 1);
-
-  function T(x, y, z, ry) { return new THREE.Matrix4().makeRotationY(ry || 0).setPosition(x, y, z); }
-
-  function add(geo, G, list, tint) {
-    if (G) geo.applyMatrix4(G);
-    if (geo.index) geo = geo.toNonIndexed();
-    geo.clearGroups();
-    geo.computeVertexNormals();
-    const p = geo.attributes.position, n = geo.attributes.normal, cnt = p.count;
-    const uv = new Float32Array(cnt * 2), col = new Float32Array(cnt * 3);
-    const S = 1 / 7;
-    const tc = topTint[Math.floor(rand() * 3)];
-    const sh = list === parts.stair ? 0.8 + rand() * 0.25 : 0.92 + rand() * 0.1;
-    const keep = list === parts.carved;
-    for (let i = 0; i < cnt; i++) {
-      const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-      const ax = Math.abs(n.getX(i)), ay = Math.abs(n.getY(i)), az = Math.abs(n.getZ(i));
-      let u, v;
-      if (ay >= ax && ay >= az) { u = x; v = z; } else if (ax >= az) { u = z; v = y; } else { u = x; v = y; }
-      uv[i * 2] = u * S; uv[i * 2 + 1] = v * S;
-      const c = tint !== false && n.getY(i) > 0.7 ? tc : white;
-      const ao = ay < 0.7 ? 0.55 + 0.45 * sstep(-1, 2.6, y) : 1;
-      col[i * 3] = c.r * sh * ao; col[i * 3 + 1] = c.g * sh * ao; col[i * 3 + 2] = c.b * sh * ao;
-    }
-    if (!keep) geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
-    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
-    (list || parts.stone).push(geo);
-  }
-  const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
-
-  // Pirámide truncada: base w×d en y=0, cima tw×td en y=h
-  function frustum(w, h, d, tw, td) {
-    const g = box(w, h, d); g.translate(0, h / 2, 0);
-    const p = g.attributes.position;
-    for (let i = 0; i < p.count; i++) if (p.getY(i) > h / 2) { p.setX(i, p.getX(i) * tw / w); p.setZ(i, p.getZ(i) * td / d); }
-    return g;
-  }
-
-  // Cuerpos escalonados de talud + tablero de doble escapulario (frente = +z local)
-  function stepped(G, w, d, tiers, tierH, step) {
-    if (G.elements[13] < 1) regRect(G, -w / 2, w / 2, -d / 2, d / 2);
-    let y = -1.5, cw = w, cd = d, tw = w, td = d;
-    for (let i = 0; i < tiers; i++) {
-      const th = tierH * 0.68 + (i === 0 ? 1.5 : 0), sl = tierH * 0.2;
-      add(frustum(cw, th, cd, cw - 2 * sl, cd - 2 * sl).translate(0, y, 0), G);
-      y += th; tw = cw - 2 * sl; td = cd - 2 * sl;
-      const bh = tierH * 0.32;
-      add(box(tw, bh * 0.6, td).translate(0, y + bh * 0.3, 0), G);
-      add(box(tw + 0.8, bh * 0.4, td + 0.8).translate(0, y + bh * 0.8, 0), G);
-      // escapulario: faldón colgante bajo la moldura
-      add(box(tw + 0.8, bh * 0.25, td + 0.8).translate(0, y + bh * 0.47, 0), G);
-      add(box(tw + 0.2, bh * 0.2, td + 0.2).translate(0, y + bh * 0.1, 0), G);
-      y += bh; cw = tw - 2 * step; cd = td - 2 * step;
-    }
-    tops.push({ G, y, w: tw, d: td });
-    return { top: y, w: tw, d: td };
-  }
-
-  // Escalinata con alfardas. Borde superior en z=0 local, baja hacia +z.
-  function stair(G, width, H, run, y0) {
-    y0 = y0 || 0;
-    const n = Math.max(4, Math.round(H / 0.3)), sh = H / n, tr = run / n;
-    for (let i = 0; i < n; i++) {
-      const depth = run - i * tr + 1;
-      add(box(width, sh, depth).translate(0, y0 + sh * (i + 0.5), depth / 2 - 1), G, parts.stair, false);
-    }
-    const wb = Math.min(3, 0.8 + width * 0.06);
-    if (G.elements[13] < 1 && y0 === 0) regRect(G, -width / 2 - wb, width / 2 + wb, -1, run);
-    for (const s of [-1, 1]) {
-      const g = box(wb, H + 0.5, run);
-      const p = g.attributes.position;
-      for (let i = 0; i < p.count; i++) if (p.getY(i) > 0 && p.getZ(i) > 0) p.setY(i, -(H + 0.5) / 2 + 0.9);
-      g.translate(s * (width / 2 + wb / 2), y0 + (H + 0.5) / 2, run / 2);
-      add(g, G, parts.stair, false);
-    }
-  }
-
-  // Muros bajos de cuartos sobre una cima (puerta al frente, +z)
-  // Templo de dos cámaras con columnas en el acceso (frente = +z local)
-  function temple(G, y, w, d) {
-    w = Math.max(10, w); d = Math.max(8, d);
-    add(box(w + 1.2, 0.7, d + 1.2).translate(0, y + 0.35, 0), G);
-    y += 0.7;
-    const t = 1.2, wall = (x, z, ww, dd, hh) => add(box(ww, hh, dd).translate(x, y + hh / 2, z), G);
-    const hh = () => 2.2 + rand() * 1.4;
-    wall(0, -d / 2 + t / 2, w, t, hh());
-    wall(-w / 2 + t / 2, 0, t, d, hh());
-    wall(w / 2 - t / 2, 0, t, d, hh());
-    const door = Math.min(7, w * 0.4), pw = (w - door) / 2;
-    wall(-(door / 2 + pw / 2), d / 2 - t / 2, pw, t, hh());
-    wall(door / 2 + pw / 2, d / 2 - t / 2, pw, t, hh());
-    // muro interior que separa las dos cámaras
-    const iz = -d * 0.12, idoor = door * 0.55, ipw = (w - 2 * t - idoor) / 2;
-    wall(-(idoor / 2 + ipw / 2), iz, ipw, t * 0.8, 1.6 + rand());
-    wall(idoor / 2 + ipw / 2, iz, ipw, t * 0.8, 1.6 + rand());
-    const v = new THREE.Vector3();
-    for (const sx of [-1, 1]) { v.set(sx * door * 0.25, y, d / 2 - t / 2).applyMatrix4(G); column(v.x, v.y, v.z, 0.6, 3.2); }
-  }
-
-  function rooms(G, y, w, d, h) {
-    h = h || 1.6;
-    const t = 0.9;
-    add(box(w, h, t).translate(0, y + h / 2, -d / 2), G);
-    add(box(t, h, d).translate(-w / 2, y + h / 2, 0), G);
-    add(box(t, h, d).translate(w / 2, y + h / 2, 0), G);
-    const fw = (w - 5) / 2;
-    add(box(fw, h, t).translate(-(fw / 2 + 2.5), y + h / 2, d / 2), G);
-    add(box(fw, h, t).translate(fw / 2 + 2.5, y + h / 2, d / 2), G);
-  }
-
-  function column(x, y, z, r, h) {
-    const n = 5, dh = h / n;
-    for (let i = 0; i < n; i++) {
-      const rr = r * (0.9 + rand() * 0.08);
-      add(new THREE.CylinderGeometry(rr * 0.97, rr, dh - 0.06, 16).translate(x + (rand() - 0.5) * 0.08, y + dh * i + dh / 2, z + (rand() - 0.5) * 0.08), null, parts.stair, false);
-    }
-  }
-
-  // Edificio genérico: centro, orientación (ry: 0 frente al sur, π/2 al este, -π/2 al oeste, π al norte)
-  function building(cx, cz, ry, w, d, tiers, tierH, step, opt) {
-    opt = opt || {};
-    const G = T(cx, opt.y || 0, cz, ry);
-    const r = stepped(G, w, d, tiers, tierH, step);
-    const run = (s) => Math.max(s.run || 0, (d - r.d) / 2 + 3, r.top * 0.8);
-    if (opt.stair) stair(G.clone().multiply(T(0, 0, r.d / 2 - 0.4)), opt.stair.w, r.top, run(opt.stair));
-    if (opt.back) stair(G.clone().multiply(T(0, 0, -r.d / 2 + 0.4, Math.PI)), opt.back.w, r.top, run(opt.back));
-    if (opt.rooms) temple(G, r.top, r.w - opt.rooms, r.d - opt.rooms);
-    return Object.assign({ G }, r);
-  }
-
-  // ---------- Plataforma Norte ----------
-  function northPlatform() {
-    const cz = -205, G = T(0, 0, cz);
-    const base = stepped(G, 220, 100, 1, 8, 0);
-    const y = base.top, W = base.w - 10, D = base.d - 10;
-    const hx = 28, hz0 = -28, hz1 = 20, uh = 4.2;
-    // Anillo superior alrededor del Patio Hundido
-    const strips = [
-      [0, (-D / 2 + hz0) / 2, W, hz0 + D / 2],
-      [0, (D / 2 + hz1) / 2, W, D / 2 - hz1],
-      [(-W / 2 - hx) / 2, (hz0 + hz1) / 2, W / 2 - hx, hz1 - hz0],
-      [(W / 2 + hx) / 2, (hz0 + hz1) / 2, W / 2 - hx, hz1 - hz0]
-    ];
-    strips.forEach(([x, z, w, d]) => {
-      add(frustum(w, uh * 0.75, d, w - 1.2, d - 1.2).translate(x, y, z), G);
-      add(box(w - 0.4, uh * 0.25, d - 0.4).translate(x, y + uh * 0.875, z), G);
-    });
-    const top = y + uh;
-    // Escalinata principal (~40 m de ancho)
-    stair(G.clone().multiply(T(0, 0, D / 2 - 0.4)), 42, top, 22);
-    // Escaleras interiores del patio
-    stair(T(0, y, cz + hz0, 0), 16, uh, 5.5);
-    stair(T(0, y, cz + hz1, Math.PI), 16, uh, 5.5);
-    stair(T(-hx, y, cz + (hz0 + hz1) / 2, Math.PI / 2), 12, uh, 5);
-    stair(T(hx, y, cz + (hz0 + hz1) / 2, -Math.PI / 2), 12, uh, 5);
-    // Altar central
-    building(0, cz - 4, 0, 9, 9, 1, 2.2, 0, { y: y });
-    // Pórtico de columnas
-    for (let i = 0; i < 6; i++) for (let j = 0; j < 2; j++) column(-25 + i * 10, top, cz + D / 2 - 7 - j * 9, 1.15, 4.2);
-    // Montículos sobre la plataforma
-    building(0, cz - 40, 0, 36, 12, 1, 5, 0, { y: top });
-    for (const s of [-1, 1]) building(s * 72, cz - 2, 0, 38, 34, 2, 4, 1.2, { y: top, stair: { w: 12 }, rooms: 6 });
-  }
-
-  // ---------- Sistema (plataforma frontal + patio + templo) ----------
-  function sistema(cx, cz) {
-    // Plataforma frontal (mira al este)
-    const f = building(cx + 22, cz, Math.PI / 2, 46, 34, 2, 4.2, 1.4, { stair: { w: 20, run: 11 }, rooms: 8 });
-    // Cuerpos salientes que flanquean la escalinata
-    for (const s of [-1, 1]) building(cx + 22 + 17, cz + s * 17, Math.PI / 2, 10, 9, 2, 4.2, 0.5);
-    // Muros laterales del patio
-    for (const s of [-1, 1]) building(cx - 2, cz + s * 21, 0, 18, 6, 1, 3, 0);
-    // Adoratorio al centro del patio
-    building(cx - 1, cz, 0, 6, 6, 1, 1.6, 0);
-    // Templo al fondo, escalinata hacia el patio
-    building(cx - 22, cz, Math.PI / 2, 36, 26, 3, 3.8, 1.3, { stair: { w: 14, run: 10 }, rooms: 5 });
-    return f;
-  }
-
-  // ---------- Edificio J (punta de flecha) ----------
-  function buildingJ(cx, cz) {
-    const ry = (3 * Math.PI) / 4;
-    const shape = (s, len, tip) => {
-      const sh = new THREE.Shape();
-      sh.moveTo(-s, -len); sh.lineTo(s, -len); sh.lineTo(s, 8 * (s / 12)); sh.lineTo(0, tip); sh.lineTo(-s, 8 * (s / 12)); sh.closePath();
-      return sh;
-    };
-    const G = T(cx, 0, cz, ry);
-    const lower = new THREE.ExtrudeGeometry(shape(12, 18, 24), { depth: 6.5, bevelEnabled: false });
-    lower.rotateX(-Math.PI / 2); lower.translate(0, -1, 0);
-    add(lower, G);
-    const band = new THREE.ExtrudeGeometry(shape(12.5, 18.5, 24.8), { depth: 1, bevelEnabled: false });
-    band.rotateX(-Math.PI / 2); band.translate(0, 5.5, 0);
-    add(band, G);
-    const upper = new THREE.ExtrudeGeometry(shape(9, 15, 18), { depth: 3, bevelEnabled: false });
-    upper.rotateX(-Math.PI / 2); upper.translate(0, 6.5, 0);
-    add(upper, G);
-    stair(G.clone().multiply(T(0, 0, 18.2)), 12, 9.5, 11);
-    regRect(G, -12.5, 12.5, -25, 19);
-  }
-
-  // ---------- Juego de pelota (planta en I) ----------
-  function ballcourt(cx, cz) {
-    add(box(30, 0.3, 56).translate(cx, 0, cz), null, parts.plaster, false);
-    regRect(null, cx - 16, cx + 16, cz - 29, cz + 29);
-    for (const s of [-1, 1]) {
-      add(frustum(13, 5.5, 40, 5, 38).translate(cx + s * 10.5, -0.5, cz), null);
-      add(box(5.4, 0.7, 38.4).translate(cx + s * 10.5, 5.3, cz), null);
-      add(box(30, 2.6, 1.6).translate(cx, 1.3, cz + s * 28), null);
-    }
-    for (const s of [-1, 1]) for (const e of [-1, 1]) add(box(1.6, 2.6, 8).translate(cx + s * 15, 1.3, cz + e * 24), null);
-    stair(T(cx - 10.5, 0, cz + 20.2, 0), 4, 5.5, 5);
-  }
-
-  // ---------- Palacio ----------
-  function palacio(cx, cz) {
-    const b = building(cx, cz, -Math.PI / 2, 44, 42, 1, 4, 0, { stair: { w: 12, run: 6 } });
-    const G = b.G, y = b.top, h = 2.4;
-    rooms(G, y, 34, 34, h);
-    rooms(G, y, 16, 16, h);
-    for (const s of [-1, 1]) {
-      add(box(0.9, h, 9).translate(s * 12.5, y + h / 2, 0), G);
-      add(box(9, h, 0.9).translate(0, y + h / 2, s * 12.5), G);
-    }
-    add(box(15, 0.2, 15).translate(0, y + 0.1, 0), G, parts.plaster, false);
-  }
-
-  function slabs(list, carved) {
-    list.forEach(([x, z, ry, y]) => {
-      const g = box(1.3, 1.9, 0.35).translate(0, 0.8 + (y || 0), 0);
-      if (carved) {
-        const q = Math.floor(rand() * 4), uv = g.attributes.uv;
-        for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) + (q % 2)) / 2, (uv.getY(i) + Math.floor(q / 2)) / 2);
-      }
-      add(g, T(x, 0, z, ry + (rand() - 0.5) * 0.06), carved ? parts.carved : parts.slab, false);
-    });
-  }
-
-  function buildSite() {
-    northPlatform();
-    // Plataforma Sur, la más alta
-    const sp = building(0, 196, Math.PI, 124, 92, 3, 7, 2, { stair: { w: 40, run: 30 } });
-    for (const s of [-1, 1]) {
-      const G = T(s * 34, sp.top, 196 + 10);
-      stepped(G, 30, 30, 1, 6, 0);
-    }
-    // Centro: G, H, I sobre un basamento común
-    building(0, -40, 0, 46, 140, 1, 2.2, 0);
-    building(0, -92, Math.PI, 30, 24, 2, 4, 1.2, { stair: { w: 12 } });
-    building(0, -40, Math.PI / 2, 52, 38, 3, 3.4, 1.2, { stair: { w: 18 }, back: { w: 14 }, rooms: 10 });
-    building(0, 12, Math.PI / 2, 30, 30, 2, 4, 1.2, { stair: { w: 12 }, rooms: 8 });
-    buildingJ(12, 100);
-    // Costado poniente
-    sistema(-104, -98);
-    sistema(-104, 38);
-    const L = building(-104, 116, Math.PI / 2, 38, 34, 2, 4, 1.4, { stair: { w: 14 } });
-    // Danzantes: lápidas al pie de la fachada
-    const dz = [];
-    for (const y of [0, 2]) {
-      for (let z = 99; z <= 133; z += 1.5) if (Math.abs(z - 116) > 10) dz.push([-104 + 17 + 3.5 - y * 0.4, z, Math.PI / 2, y]);
-      for (let x = -120; x <= -88; x += 1.5) dz.push([x, 116 + 17 + 3.5 - y * 0.4, 0, y]);
-    }
-    slabs(dz, true);
-    // Costado oriente
-    ballcourt(100, -124);
-    building(100, -70, -Math.PI / 2, 32, 30, 2, 4.5, 1.2, { stair: { w: 14 }, rooms: 8 });
-    palacio(106, -18);
-    building(100, 32, -Math.PI / 2, 32, 30, 2, 4, 1.2, { stair: { w: 14 }, rooms: 8 });
-    building(92, 92, -Math.PI / 2, 26, 22, 1, 4, 0, { stair: { w: 10 } });
-    building(72, 142, Math.PI, 24, 18, 1, 3.5, 0, { stair: { w: 10 } });
-    // Estelas sueltas en la plaza
-    slabs([[-30, 150, 0.2], [28, 150, -0.1], [40, -140, 0.3], [-22, -128, 0], [58, 120, 0.7]]);
-  }
-
-  // ---------- Árboles, pasto, magueyes y piedras ----------
-  function mergeParts(list) {
-    return THREE.BufferGeometryUtils.mergeBufferGeometries(list.map((g) => { g = g.index ? g.toNonIndexed() : g; ["uv", "uv2"].forEach((k) => g.deleteAttribute(k)); return g; }));
-  }
-  function instanced(geo, mat, items, shadow) {
-    const im = new THREE.InstancedMesh(geo, mat, items.length);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
-    items.forEach((it, i) => {
-      q.setFromAxisAngle(up, it.rot);
-      if (it.tilt) q.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(it.tilt[0], 0, it.tilt[1])));
-      m.compose(new THREE.Vector3(it.x, it.y, it.z), q, new THREE.Vector3(it.sx, it.sy, it.sz));
-      im.setMatrixAt(i, m);
-      if (it.c) im.setColorAt(i, it.c);
-    });
-    im.castShadow = !!shadow; im.receiveShadow = true;
-    scene.add(im);
-  }
-
-  function buildTrees() {
-    // Copa detallada: varios lóbulos
-    const lobes = [];
-    for (let i = 0; i < 5; i++) {
-      const a = (i / 5) * Math.PI * 2, r = i === 0 ? 0 : 0.55;
-      lobes.push(new THREE.IcosahedronGeometry(0.62 + rand() * 0.2, LOW ? 0 : 1).translate(Math.cos(a) * r, (i === 0 ? 0.35 : 0) + rand() * 0.2, Math.sin(a) * r));
-    }
-    const canopy = mergeParts(lobes);
-    const canopyFar = new THREE.IcosahedronGeometry(1, 0);
-    const trunk = mergeParts([
-      new THREE.CylinderGeometry(0.1, 0.17, 1, 6).translate(0, 0.5, 0),
-      new THREE.CylinderGeometry(0.04, 0.07, 0.6, 5).rotateZ(0.8).translate(0.2, 0.8, 0),
-      new THREE.CylinderGeometry(0.04, 0.07, 0.55, 5).rotateZ(-0.7).translate(-0.18, 0.75, 0.05)
-    ]);
-    const cMat = new THREE.MeshStandardMaterial({ roughness: 1, flatShading: true });
-    const tMat = new THREE.MeshStandardMaterial({ color: lin("#4d3b2a"), roughness: 1 });
-    const greens = ["#56612e", "#6b6c35", "#4a5a2c", "#7a7440", "#5e6a38", "#3f4f27", "#6f7a3c"].map(lin);
-    const near = [], far = [];
-    const plazaTrees = [[-60, 148], [-141, -40], [-142, 72], [138, 78], [140, -64], [-128, -150], [-142, 160], [120, 175], [-40, -268], [140, -175], [-139, 5], [142, 125]];
-    plazaTrees.forEach(([x, z]) => near.push([x, z, 3.5 + rand() * 1.5]));
-    for (let i = 0; i < 90000 && near.length < Q.near; i++) {
-      const x = (rand() - 0.5) * 2000, z = (rand() - 0.5) * 2300;
-      const d = plateauDist(x, z);
-      if (d < 6 || rand() > (0.35 + 0.65 * sstep(0.3, 0.55, fbm(x / 150, z / 150, 3))) * sstep(6, 40, d)) continue;
-      near.push([x, z, 2.4 + rand() * 2.6]);
-    }
-    for (let i = 0; i < 60000 && far.length < Q.far; i++) {
-      const a = rand() * Math.PI * 2, r = 1000 + rand() * 5500;
-      const x = Math.cos(a) * r, z = Math.sin(a) * r;
-      if (Math.abs(x) < 1000 && Math.abs(z) < 1150) continue;
-      if (rand() > sstep(0.3, 0.55, fbm(x / 250, z / 250, 3))) continue;
-      far.push([x, z, 3 + rand() * 3]);
-    }
-    const mk = (list, withShadow) => {
-      const trunks = [], cans = [];
-      list.forEach(([x, z, s]) => {
-        const y = terrainH(x, z), th = s * 0.9, rot = rand() * 6.3;
-        trunks.push({ x, y: y - 0.2, z, rot, sx: s * 0.8, sy: th, sz: s * 0.8 });
-        cans.push({ x, y: y + th + s * 0.4, z, rot, sx: s * 1.05, sy: s * (0.75 + rand() * 0.2), sz: s * 1.05, c: greens[Math.floor(rand() * greens.length)] });
-      });
-      return { trunks, cans };
-    };
-    const n1 = mk(near), n2 = mk(far);
-    instanced(trunk, tMat, n1.trunks, !LOW);
-    instanced(canopy, cMat, n1.cans, !LOW);
-    instanced(canopyFar, cMat, n2.cans, false);
-
-    // Matas de pasto seco en la plaza y orillas
-    const blades = [];
-    for (let i = 0; i < 5; i++) {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute("position", new THREE.Float32BufferAttribute([-0.05, 0, 0, 0.05, 0, 0, 0.1 * (rand() - 0.5), 1, 0.25 * (rand() - 0.5)], 3));
-      g.rotateY((i / 5) * Math.PI + rand() * 0.4).rotateZ((rand() - 0.5) * 0.7).translate((rand() - 0.5) * 0.25, 0, (rand() - 0.5) * 0.25);
-      g.computeVertexNormals();
-      blades.push(g);
-    }
-    const tuft = THREE.BufferGeometryUtils.mergeBufferGeometries(blades);
-    const tufts = [], dry = ["#c4ae74", "#a99a5e", "#8f8c50", "#b7a06a", "#9aa05a"].map(lin);
-    for (let i = 0; i < 400000 && tufts.length < Q.tufts; i++) {
-      const x = (rand() - 0.5) * 340, z = -300 + rand() * 590;
-      if (plateauDist(x, z) > 40 || blocked(x, z, 0.6)) continue;
-      if (rand() > 0.35 + 0.65 * fbm(x / 14, z / 14, 2)) continue;
-      const s = 0.25 + rand() * 0.4;
-      tufts.push({ x, y: terrainH(x, z) - 0.03, z, rot: rand() * 6.3, sx: s * 1.4, sy: s, sz: s * 1.4, c: dry[Math.floor(rand() * dry.length)] });
-    }
-    const v = new THREE.Vector3();
-    tops.forEach(({ G, y, w, d }) => {
-      const n = Math.min(2500, (w * d) / 2);
-      for (let k = 0; k < n; k++) {
-        v.set((rand() - 0.5) * (w - 0.8), y, (rand() - 0.5) * (d - 0.8)).applyMatrix4(G);
-        const s = 0.2 + rand() * 0.35;
-        tufts.push({ x: v.x, y: v.y - 0.02, z: v.z, rot: rand() * 6.3, sx: s * 1.4, sy: s, sz: s * 1.4, c: dry[Math.floor(rand() * dry.length)] });
-      }
-    });
-    instanced(tuft, new THREE.MeshStandardMaterial({ roughness: 1, side: THREE.DoubleSide }), tufts, false);
-
-    // Magueyes: hojas en roseta
-    const leaves = [];
-    for (let i = 0; i < 14; i++) {
-      const a = (i / 14) * Math.PI * 2 + rand() * 0.3, tilt = i < 5 ? 0.35 : 0.9 + rand() * 0.3;
-      leaves.push(new THREE.ConeGeometry(0.09, 1.2, 4).translate(0, 0.6, 0).rotateX(tilt).rotateY(a));
-    }
-    const agave = mergeParts(leaves);
-    const agaves = [];
-    for (let i = 0; i < 30000 && agaves.length < 1400; i++) {
-      const x = (rand() - 0.5) * 420, z = -330 + rand() * 660;
-      const d = plateauDist(x, z);
-      if (d > 60 || blocked(x, z, 1.5) || (d === 0 && rand() > 0.12)) continue;
-      const s = 0.7 + rand() * 0.8;
-      agaves.push({ x, y: terrainH(x, z), z, rot: rand() * 6.3, sx: s, sy: s, sz: s, c: lin(rand() < 0.5 ? "#6d8a78" : "#7f957a") });
-    }
-    instanced(agave, new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true }), agaves, true);
-
-    // Piedras sueltas al pie de los edificios
-    const rock = new THREE.DodecahedronGeometry(1, 0);
-    const rocks = [];
-    fp.forEach((r) => {
-      const per = 2 * (r[1] - r[0] + r[3] - r[2]);
-      for (let k = 0; k < per / 2.2; k++) {
-        const side = Math.floor(rand() * 4), t = rand(), o = 0.3 + rand() * 2.2;
-        const x = side < 2 ? r[0] + t * (r[1] - r[0]) : (side === 2 ? r[0] - o : r[1] + o);
-        const z = side >= 2 ? r[2] + t * (r[3] - r[2]) : (side === 0 ? r[2] - o : r[3] + o);
-        if (blocked(x, z, 0.1)) continue;
-        const s = 0.12 + Math.pow(rand(), 2) * 0.5;
-        rocks.push({ x, y: terrainH(x, z) + s * 0.2, z, rot: rand() * 6.3, tilt: [rand(), rand()], sx: s * (1 + rand() * 0.6), sy: s * 0.6, sz: s, c: new THREE.Color().setHSL((35 + rand() * 10) / 360, 0.1 + rand() * 0.08, 0.4 + rand() * 0.15).convertSRGBToLinear() });
-      }
-    });
-    instanced(rock, new THREE.MeshStandardMaterial({ roughness: 0.95, flatShading: true }), rocks, true);
-  }
-
-  // ---------- Cielo ----------
-  const skyU = { top: { value: new THREE.Color() }, horizon: { value: new THREE.Color() }, low: { value: new THREE.Color() }, cloud: { value: new THREE.Color(1, 1, 1) } };
-  const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(50000, 32, 16),
-    new THREE.ShaderMaterial({
-      uniforms: skyU, side: THREE.BackSide, depthWrite: false, fog: false,
-      vertexShader: "varying vec3 vp; void main(){ vp = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
-      fragmentShader: [
-        "uniform vec3 top; uniform vec3 horizon; uniform vec3 low; uniform vec3 cloud; varying vec3 vp;",
-        "float hs(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }",
-        "float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(hs(i), hs(i + vec2(1.0, 0.0)), f.x), mix(hs(i + vec2(0.0, 1.0)), hs(i + vec2(1.0, 1.0)), f.x), f.y); }",
-        "float fb(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 6; i++) { s += a * vn(p); p *= 2.03; a *= 0.5; } return s; }",
-        "void main(){ float h = vp.y; vec3 c = h > 0.0 ? mix(horizon, top, pow(smoothstep(0.0, 0.55, h), 0.8)) : mix(horizon, low, smoothstep(0.0, -0.2, h));",
-        "  if (h > 0.0) { vec2 q = vp.xz / (h + 0.06) * 0.8; float n = fb(q + vec2(3.0, 7.0)); float cl = smoothstep(0.5, 0.78, n) * smoothstep(0.0, 0.1, h);",
-        "    vec3 cc = cloud * (0.78 + 0.3 * fb(q * 2.3 + 1.7)); c = mix(c, mix(cc, horizon, smoothstep(0.25, 0.0, h) * 0.6), cl * 0.9); }",
-        "  gl_FragColor = vec4(c, 1.0); }"
-      ].join("\n")
-    })
-  );
-  scene.add(sky);
-
-  // ---------- Luz ----------
-  const hemi = new THREE.HemisphereLight(0xcfe0f5, 0x8a7a58, 0.55);
-  scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffffff, 1.6);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(Q.shadow, Q.shadow);
-  Object.assign(sun.shadow.camera, { left: -330, right: 330, top: 330, bottom: -330, near: 10, far: 2400 });
-  sun.shadow.bias = -0.0004;
-  sun.shadow.normalBias = 0.4;
-  scene.add(sun, sun.target);
-  scene.fog = new THREE.Fog(0xffffff, 600, 7000);
-
-  const sunDir = new THREE.Vector3(0, 1, 0);
-  const col = (a, b, t) => new THREE.Color(a).lerp(new THREE.Color(b), t);
-  function setHour(h) {
-    const t = (h - 6) / 12;
-    const el = Math.max(0.03, Math.sin(Math.PI * t) * 1.2);
-    const hx = Math.cos(Math.PI * t), hz = 0.42 * Math.sin(Math.PI * t);
-    const hl = Math.hypot(hx, hz);
-    const dir = new THREE.Vector3((hx / hl) * Math.cos(el), Math.sin(el), (hz / hl) * Math.cos(el));
-    sunDir.copy(dir);
-    const day = sstep(0.02, 0.55, el);
-    sun.color.copy(col("#ff9a5c", "#fff3df", day)).convertSRGBToLinear();
-    sun.intensity = 0.5 + 0.95 * day;
-    hemi.intensity = 0.28 + 0.34 * day;
-    hemi.color.copy(col("#f0b894", "#cfe0f5", day)).convertSRGBToLinear();
-    const horizon = col("#e9a47a", "#d6e0e8", day);
-    skyU.top.value.copy(col("#2e3d63", "#5b8fd2", day));
-    skyU.cloud.value.copy(col("#f2c9a4", "#fbf7f0", day));
-    skyU.horizon.value.copy(horizon);
-    skyU.low.value.copy(col("#8f7d78", "#a9b7c4", day));
-    scene.fog.color.copy(horizon).convertSRGBToLinear();
-    const hh = Math.floor(h), mm = Math.round((h - hh) * 60) % 60;
-    void hh; void mm;
-  }
-
-  // ---------- Construcción ----------
-  buildTerrain();
-  buildSite();
-  buildTrees();
-  const tex = stoneTextures();
-  const mats = {
-    stone: new THREE.MeshStandardMaterial({ map: tex.map, normalMap: tex.normal, normalScale: new THREE.Vector2(1.4, 1.4), vertexColors: true, roughness: 0.93, color: lin("#f4ede0") }),
-    stair: new THREE.MeshStandardMaterial({ map: tex.map, normalMap: tex.normal, normalScale: new THREE.Vector2(1.1, 1.1), vertexColors: true, roughness: 0.93, color: lin("#e2dcd0") }),
-    slab: new THREE.MeshStandardMaterial({ map: tex.map, vertexColors: true, roughness: 0.9, color: lin("#fff4dc") }),
-    plaster: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, color: lin("#cdbb97") }),
-    carved: new THREE.MeshStandardMaterial({ map: carvedTexture(), vertexColors: true, roughness: 0.9 })
-  };
-  Object.keys(parts).forEach((k) => {
-    if (!parts[k].length) return;
-    const g = THREE.BufferGeometryUtils.mergeBufferGeometries(parts[k]);
-    const mesh = new THREE.Mesh(g, mats[k]);
-    mesh.castShadow = mesh.receiveShadow = true;
-    scene.add(mesh);
-  });
-
-  // ---------- Recorrido ----------
-  const sites = [
-    { name: "Vista general", era: "c. 500 a.C. – 800 d.C.", cam: [300, 230, 420], tgt: [0, 0, -10],
-      text: "La Gran Plaza mide cerca de 300 × 200 m y se niveló sobre la cima del cerro. Monte Albán fue la capital zapoteca durante más de mil años. Patrimonio de la Humanidad desde 1987." },
-    { name: "Encuadre de la foto", era: "Desde la Plataforma Sur", cam: [-8, 42, 136], tgt: [-86, 3, 18],
-      text: "Vista hacia el noroeste: el Sistema M con su escalinata en primer plano y, al fondo, el Sistema IV y la Plataforma Norte." },
-    { name: "Plataforma Norte", era: "Monte Albán II–IIIB", cam: [70, 60, -80], tgt: [0, 8, -200],
-      text: "El conjunto más grande del sitio. Una escalinata de unos 40 m de ancho sube a un pórtico de columnas y a un patio hundido con altar central. Era el recinto del poder político y religioso." },
-    { name: "Plataforma Sur", era: "Monte Albán IIIA", cam: [80, 55, 95], tgt: [0, 12, 190],
-      text: "La estructura más alta de la plaza; desde su cima se domina todo el eje norte‑sur. En ella se hallaron estelas con cautivos y glifos calendáricos." },
-    { name: "Edificio J", era: "Monte Albán II · 100 a.C.–200 d.C.", cam: [70, 32, 150], tgt: [12, 4, 100],
-      text: "Tiene forma de punta de flecha y está girado unos 45° respecto al resto de la plaza. Sus lápidas registran lugares conquistados; se ha propuesto que funcionó como observatorio." },
-    { name: "Edificios G, H, I", era: "Eje central", cam: [80, 40, 15], tgt: [0, 5, -40],
-      text: "Tres construcciones unidas que forman la espina central de la plaza, con escalinatas hacia ambos lados. Probablemente templos." },
-    { name: "Los Danzantes", era: "Monte Albán I · 500–100 a.C.", cam: [-50, 16, 150], tgt: [-96, 3, 120],
-      text: "Su fachada tenía más de 300 lápidas grabadas con figuras humanas en posturas contorsionadas. Hoy se interpretan como cautivos sacrificados, no como bailarines." },
-    { name: "Sistema IV", era: "Monte Albán IIIB", cam: [-30, 32, -48], tgt: [-100, 4, -98],
-      text: "Esquema típico de «sistema»: plataforma frontal con escalinata, patio con adoratorio y templo al fondo. El Sistema M, más al sur, repite el mismo plan." },
-    { name: "Juego de pelota", era: "Planta en I", cam: [60, 30, -92], tgt: [100, 0, -124],
-      text: "Cancha con taludes inclinados y sin anillos, delimitada por cabezales en ambos extremos." },
-    { name: "Palacio", era: "Residencia de élite", cam: [55, 30, 10], tgt: [106, 2, -18],
-      text: "Conjunto de cuartos alrededor de un patio central, sobre una plataforma baja con escalinata hacia la plaza." }
-  ];
-  // ---------- Presentación: un clic = siguiente toma ----------
   const slides = [
-    { title: "Los zapotecas", text: "", cover: true, cam: [940, 400, 1320], tgt: [0, 0, -30] },
-    { title: "Ubicación geográfica", cam: [620, 260, 880], tgt: [0, 10, -40],
+    { title: "Los zapotecas", text: "", cover: true },
+    { title: "Ubicación geográfica",
       text: "Se desarrollaron principalmente en los Valles Centrales de Oaxaca, aunque también ocuparon otras regiones del estado." },
-    { title: "Periodo", cam: [216, 150, 297], tgt: [0, 0, -10],
+    { title: "Periodo",
       text: "Su civilización se desarrolló aproximadamente desde 500 a. C. hasta 900 d. C., aunque los pueblos zapotecas continuaron existiendo después." },
-    { title: "Ciudades principales", cam: [0, 44, 150], tgt: [0, 6, -120],
+    { title: "Ciudades principales",
       text: "Sus principales centros fueron Monte Albán, Mitla, Yagul, Zaachila y San José Mogote. Monte Albán fue su principal centro político y religioso." },
-    { title: "Organización social y política", cam: [48, 24, -108], tgt: [0, 10, -192],
+    { title: "Organización social y política",
       text: "Tenían una sociedad jerárquica, dirigida por gobernantes y sacerdotes. Debajo de ellos estaban artesanos, comerciantes y agricultores." },
-    { title: "Economía", cam: [68, 22, 8], tgt: [106, 2, -18],
+    { title: "Economía",
       text: "Su economía se basaba principalmente en la agricultura, especialmente el maíz. También practicaban el comercio, la artesanía, la caza y la pesca." },
-    { title: "Religión", cam: [60, 24, -4], tgt: [0, 6, -40],
+    { title: "Religión",
       text: "Eran politeístas y adoraban dioses relacionados con la naturaleza. Cocijo, dios de la lluvia y el rayo, era uno de los más importantes." },
-    { title: "Aportaciones culturales", cam: [52, 18, 136], tgt: [12, 4, 100],
+    { title: "Aportaciones culturales",
       text: "Desarrollaron uno de los sistemas de escritura más antiguos de Mesoamérica, además de calendarios, arquitectura monumental, cerámica y esculturas." },
-    { title: "Elementos distintivos", cam: [-64, 9, 146], tgt: [-94, 3, 122],
+    { title: "Elementos distintivos",
       text: "Destacan Monte Albán, las urnas funerarias, la escritura zapoteca, las inscripciones en piedra y el culto a Cocijo. También son conocidos como benizáa, “gente de las nubes”." },
-    { title: "Xquixhepe' lii", text: "(Gracias)", cover: true, cam: [250, 120, 320], tgt: [0, 4, -40] }
+    { title: "Xquixhepe' lii", text: "(Gracias)", cover: true }
   ];
+  const IMGS = ["https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__7/image-feb77501-4a67-450a-aed3-ced6358ed22e.png?Expires=2106061904&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=Bo96D-sy5-Fa-XnVseemw3XNSl3GyzY1a1572wK5wLFweHuv0IQfhe666-LdZ1R5bnaqiZH5ZxmyCBIy6giw9ACsFjTrNiuyvH2cV6Eeyjyws~2wQ8qmRDGn~pvyJ64REk0sOCFiNZPxkjNmCYVWMDVl0zD0nIGoLvyQNB3rAWNMC0dISa2BQeZyayGk-6AJ00MhKuqDx82x2z6TluPnk6tEzIfHEZHfQ9CeI2CGmoxib7f9YHQKKzPRKPL3SwoKeFqkCt-7NDTUKFwpGMkkL1xqUy7pYCu6hEoPSqkAj3PyyYJU-ojcrZAczAsANmmfVOE53zJI27hMBbI~b8oJyg__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__2/image-60fa1ab7-0533-4054-a08f-37dc7c7619e0.png?Expires=2106063644&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=GCI27VNR~lsZcNFneUfW9Q4qFr1npOTYQH5hkUvdFHwa9uKLgKueUzxNTT6Ug-t0u5QWDvKplhjgE5V4rHlmvqJsfnvytOORLpyqL0brKHu4l3EXYdWCqrFet8Ur~crDGmrpIocC9UHIboYCBsSotf5O39CxrxGcIcfUc408XUgZZCdOG60Sm353OHSNDsEh0-N7XozZupRGw6faZx1m6-0xaIS9HhxVd70pmy9zZxBKf0WP1LedFaHRQoJa1E4mR5TI7kKcyO9sLtA9LMvkdPHlOjKz0ZRih7x4k-WpPzAEnGKTv4U1-aGETTZaJZU5Vc3~~JWIJu8QXe0Yk-mpyA__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__9/image-c909f94a-d42b-4819-ac7c-7c5e9fd3cfac.png?Expires=2106063649&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=AcBpL0YmkwRD8cNOgm50wlYYbOpFziLyp82PSiYlhSqo82kFiHnMWftAZNwuhWbjiH6aNX2DfbgB1dc7tieFMAL7udYbvT956p7P2NRQ1dIU9EHpCmpZ1LDLorRLhdx7SrSjp2b3uNuqfAybYHn69j06A2~ncgndBTq6-36MTffmm5o71ZdIRi0~W7p20o~kYpfONc0VNISLChv8V115IkL-iDOHv3A06ge8sxm~lWGdy8~szp~fEDcHHWiP6BRT0vcy4t3W~MnNLIB~a-LmMxN8KZ-ZIp~R37Nk~hiJwGWCcusMxJIxVB1EoCjY~lZ1XYRZrBEPcx7FfxGGVKVDpg__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__1/image-e3c66128-6ba4-447a-80db-0e3a1eb5cb2d.png?Expires=2106063649&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=PsYLz5FAEPO5roLW7eRTAWcojUKM2oe~vq1EhyX-e8hR8NklLq~foPiH3b3sazPklyFQDQBe529puvhrvVCmCyEEeRW41sIr0Tj2okX-HYCAo3SNMRk7pTV5THBAu4VQnepW-ejg4DoUbjn9dIYvHjmy-sQpW0m7-iAdQlwwW12P69h~w2kUnK4tYZ6ZLWpqvv1KKHwHAHyY4SQSLpOf81q8xPI57vSFEU0Svut1LXTR8AdncLfvcmXk-17N9cdF4xda4ovsVbzxYm1Mtb3~j53cbajJ7BDBc9kJfxN0B1zGd7KN16Vy-28kA1G0DPhQ0omtm2Lb7drQNNkHVtz1gg__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__7/image-3c17f9b0-a19f-4580-9f24-2015c3ef61e6.png?Expires=2106063652&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=nxTsovQAJq-UozXY~jroFlpu2aZkFpeFFbuvfOJmVnhUAGb5OCDfm2dg0hqBaMyj5823YmRqu7zl1SXDI6Zlcb7OfWoABzwXSxBgLrHVanc6eY0kCkB81DI8B5RlwWhJRb2nvHri-dDiUUSxgzObE2QYZC7VKxzugfzckLbc4iTdPr29CCoOZ0brrJUOobXOyy6rQLgKhVnLrG69vluKbAd4~U6chCOGtR0VfWSc-rGZlN-mdaxE9FrcwT~gVyv8lygn6IRFM2zv4TbR14rKZ1NU-BMO6yp~BYkrkPmf2S~hOfnul0u4FmhzcDOBsytKBV~H3dOHbsY9LRIRjqyGWw__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__1/image-738d9205-020b-4a7c-95fc-13f0c3711c90.png?Expires=2106063655&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=IMwtgWVPsNBg0A8Y7Q4j6CTvjZ8rNuslURS-LPNXn~keHgeOVWMoUbZtB2IGPr5uKeXtecyGtGAv0wwvWLqJKzRDqfSWSEa0N1BJSUTyFrjRzBwgOTNAI5MNG-QZSdXDrMzGQN~SNmG00WsCfLsIBai2JTYUBDYkT4uyIlg2a9VA-uExMwPFDUMOr8N4l~yu7V2xwfrmM4YI0y1wLVuQsg04z~w~tM9GUNs~wkAzop07jclMOKDtT9kofAiwt~z5c010g3R2yE61Eiy7F0qHuTqhyHXz-CaPjHVUjfG9byHukhJj4zFJpyEfO92vAebhuDpvd5N-NDQqnqrJ2hwdkQ__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__2/image-e054cf9d-16dd-4ea4-bd86-a7c3d2a8df7c.png?Expires=2106063659&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=ZsJQMY~FIF7K~i-2~msgmBPljUtGwOAdri2828oZ6aLNNc3wUbV1~puxLv2Ji1n~74K68oVNOPnuPp0449NtsIzPiAkM-b~y-tAMmG048rSfl4W3xhf3Ydp2HINY~jvtx2mY1XZHvlE9pwp1PMJ5ZAiJKltdiHc4nip20SkjpB8at-mUII54c286K4T1Z1S66X9LhYyZRPqVLKSPQhMvJWOCvHEr1qsG1RFY-4fMbxKd~VD0A7YlTgSMF1SVgFR3Z-eF9w0pPd8jGF0vgIgw28KBTXjR1HbQkB1TInCArAEBWBMSscxwu11~XwxiLA0cZl57UTTuCcVCiGnWl5mISw__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__3/image-5f8a94c1-af81-4798-b8db-45d7ef60343b.png?Expires=2106063661&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=Fgp3JZR4CVfapNI2pDq-xvkza5w~K-4hb5haVSf9H8AbvKlVYNQ9u25vHhM5fCOV9dWzvisBOcQKwrDtzL7sYsTBZkNkc12RmWK1dNCByCueDYGbwHBsz-V8HhYJFPAXgYbehuesQyTd6K03LbizNswOJVeSskgl1qg2GesR4ADW0JVtU3KDW-YsyKf4cDk~M1vhxU0VvJHwY0sLLgwgugRBPo2q5bj7rjqMIRo6akgpl5IdTjHToYgvZbKd~2-BavcjKIofCB62CMyf-I0872DuMSuVV3Ii~tsi5t3npUrz85tP-9Y8W0GjBL98D8pljlVjKBw2jN6mazVgYIzn9A__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__6/image-a8678a9c-6c58-4033-8c91-7d8f5b3d758d.png?Expires=2106063664&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=NVyXu1lIEwrPKY9vTBwg5Zgh4LmgqHRNpkfIKBD7uJNHSM-6C8JHAGHdPcrs-Yw24wdqnZJwwvlyAQV88ZZOTeyS3o4T5ee-qf13jM7EA88HTkibqjXoJSKbsjrfCTAKO4G1C0LRttv6I04ZMnGU7I9nuZ0CoNQ434D7rmXMqm4WrLc3T0Lz7wcZGbmJhZQc3bdwTxtWWRvPJPmGufvzGlr4lAybsxdITbLAzPhFjbPVtgyfT0PdJ~GsO~sMr9B2mzEsrBRnufx2FRmq1rBc~mDwwNRw6L8ok~KEia4hCU1sOrQ4~neDSFwgMLsypnlqYunzLKgvn-g3K686JNtdAQ__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-i-m-a-g-e-v1/media__4/image-f2d6a79e-1a45-43f1-9193-8c2e41cf767b.png?Expires=2106063664&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=zzxhGPm8S7XS~d~UMPTrgwNMUQueI7Rk5y18EJcQC1ZZuNZ2ZGcRwxI2k5haphTOOFNr~kt4QDCkfnC1dmbe6d-KsWSwf47Tu~7md1bWUcjIbYhZMLnl2WiPwfUpsCrkZpD6ws0Or-vj7drdzqMyuAy59MobAN1aLAVDieSrV5KhSJcMI6Q~CKFBqxIi8uO4wQfwCIPJHiuWZBeR3KHqKJaJjmB7N5gACCYBCXMkI~KnzcLMAYI5Xq41ODd2jr1UTm0dRhre1jbSjttMtdH9JcICjFnCPt5JcKGHQ~l9-gYLBtGuzW1dChZz0ofkRNhAoJxBBjUAi0GwOBFyg1aM4Q__"];
+  const VIDS = ["https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__5/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-d7f4b7a6-8abe-439f-94e2-4a8ff948cf8e.mp4?Expires=2106063831&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=b4TVIyvNj9ARU8liiqNfCbrrwhRJN4GXNxdw7J9GVzxq1Xkmj-flMc5PWVBNmAm4mG5422p0fPjcfZ~fZu6mKu2bz8~kNRS0yIgKmrOlmutcqulp2Vqvl9OEM7g-pBkXSNySvsWyv7BTSjvySMa2xB7VJmBTgwUx9IDlS36WmeewENmbG7LALxIwRAGI0wRR54mTyj3D7N19nX2PO9sCqwCjHu2SVdj-BX8CXEjUVWPojYHiEoCe~Esik5nW6gAduBUOw99mGSs~3SzTCdkLqjKOonRxDdeoefSuJ9yxx0MgBZ3xYGllMQZGR2eKaMpcqCT6nxxwYfI1zZdiX-LYWw__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__5/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-34997c94-87e2-44b9-a77f-e17763b4d9ac.mp4?Expires=2106063841&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=r~1EGQhneMtKOgBbiseu6sJrVxCfV6rFd7jH44MNeAIOe7XErguZWQW-9uB-0l09M7vf9dUf6zg1e8RfeosFGqmBbpZyGDJAGGHtct8DVOWgb3NaLTgheXFzxvkU~UPLhPQrbaN52CulIb5tMLCTSUoWXH5gvyXdmfsFo5zj3LSZ4I7-FDVoaxdeInog-gIaCxt1gi2RfvU5sJI9xA0sVVmfEgRYN-Reoxege21QFPdSkqwOfnJ3IVdw4fY47r8f6K9HuzJUljjCcOC9zGyTxrLZCLiZHtcOFgDifDz3RcQdz2b7I-jMsDyQtP0ETRWY5P2sIBcSWvjv9M-y215H1Q__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__2/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-f3b4b561-97b3-4763-9385-67ff83ca5a54.mp4?Expires=2106063833&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=Yny~A~oQCr1TXGv950kDgePvGLNweS4cUM4Ug68-gsQuHpSbUvYbZ~l-rwuSMWP53V4SteSvuPW-C5WzwpYliAd3rwIXhnTiisKGHUsIe~M6LXj2DhtQacfO0lVjvb3PP2Pe2-TattQGVmqrgFPPWbnFCff5OoLzV06obERq7GLZWCaKGJ6t~RyyE9ozXuZrqm~bxzH8SncYR6tyqaw917GtMZdD-LWAh8JAsMwOeBq4ogUP8gzXeD6LB8twXLPEfKMh66QXA6J-kMtxLT8uETLIY7fm5YTT1moF5il47QSrI4L~CB43akDtdzEPnJZR~7yZXKHBJ6d9tMQ20LqJ6w__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__3/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-471960cd-f317-416d-bfc1-e6a1015fd03d.mp4?Expires=2106063843&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=kEOfHX5rtbVAQpNY7GeiXZNsXvOtKZoFhWUkbMF2RCGLZY4hpUVJXdZ7Pg-MvuKpotp~nUhMv7xsQwXe6eUA4ODz4~RsZwSqdpzDliUMrkVQJKMhGC7hw2wo8OyG5u8ivlyL~P1lDA6lW9uAvNXug-dp3VNKlA5nr4gQLPm-hibFxJ5w6tHhTPud3sB9-Yj5Ss8PUWZI~vxRGghFcfLBl60KdF7VLXn-tMlvOYhBMu8mTrd4mcAsNn2iE3hhOi4iUOiN0E3aCxruV0FKR3eaFy89-bwACU-a7CQogS-Li1hb-BOu2P1A9MHwXRhgZa7x2DoSTnNzWmbmVTDFcg5yyA__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__5/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-7194c4a5-7587-4c01-807d-5ab8d8d1d0c4.mp4?Expires=2106063855&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=GM-LrQmpPuUyzWePwYZa~VcI6qM3FHsISTDqrODTSU~o82RXiQG6GFwoA~oiw2EpPIvX4~jm7mHUTFCexAxKykGitLdd2uvy5urKULRGyMvcnmK0hc~Xx68PJFGtQ5ywGYwX7~SHnrUS3ZnHPzC7dUN-uNoh1HoXVf91h-XuNRrC5hN~EN1nU759FYt903atPU~9NZEuLzHswbtEwLLy94Ny~wmRxmnJ-M5wF18aA3wijczC6KlZqfnojAQVH~OtCIdLGqK7Pr3s8-O1y7Bk8AQCubqMZ6CZ0uHDnUR~ehOJOQ-Djv5SCFsiCOH9hOt7dK31PMMX-KqfuLrldQZzGg__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__1/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-77b722f8-e969-409a-9f48-1d13e33122eb.mp4?Expires=2106063841&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=rDeOLvYz~Elq9CT5zOD2fK942-MPiF1Rytt3lfOd8LQwaFJGFMWZrP1Kb3tSoXH-ATUQO2CKAj2Ibi20gQ4nFmNjraPQRHQlvXm1cMoz7oH6MivFUdaoL3WHGVPQJtovhdwq44jl4TYsawMF1kFbhqcGIxJ1DUA4lk~wXGjt1LgiQ4X5C7nbSDVtR9Ljh0p0RP7Efy49WG1od6jDdASIvQYxwEQqnG59BebCN4skjsJktrtXihr76xmCWTnZbYFp307cKTWWY1S-vrVGTHxb6A0tJNIN1dRZYCmE8xJzSMvIIgxgB6qAan0D~PMaicsvnE6nFlVoaFKYy0HaZ6lGyg__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__6/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-ad9fc5a4-32b5-4758-8c46-0c1e5387e736.mp4?Expires=2106063843&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=GPlacX7syMbvA8ftvt6c7BPy5oRpnvZRSDjI-u--Lz7Jo5iIbACetESIghHA~iTjnbiJ4Zk~0tV6Oae5g7pgTjLbV1g3NwtIki0ZowoooRN1j~Zddht4Mv2gFxN0Ln9qGncLbBFALbTz6kdbZSBoYT6bcmhLPNwLLWCWfAQ3xbit3vUooF0JQBNUci0G5RcXSDu5HHL4zi5cX1lfiMVB6dHDjjwHFKgp3Ny9mvJWg6hiA-zoJGNoCPcP-UYPudLi2jZLhOYiT5XRaV9fb1xZd-0u52NjIhnuXc5loPJTisu8Se5g294W2aAZLxzagOm~0Te8HwuCdl9SfD3IOQdqdQ__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__1/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-c8c92d80-8296-4f19-b6c8-55abea140352.mp4?Expires=2106063843&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=Q4g5itEzfGD-CzxUPVNtzZ1TJl9w7Q2lDgM4nPL9KSLCPLjZmSaBP5CFBDIYkBkLT5-TGFlMzNFQxD5DhctfHMx2-Vq-QTSwZIkASM~yW6MsT~KQ9Zov6mDRSYMj3kVsFqqitROk9tJWlxYPqiPJK1AjsWVYKwg~CLE21CjIF8dYD7rEek8xzzNugKyxBw4QRI7K7P91koQ~AhFJWOyGt4zMHQWUlOvdGLQqYxLMZMGfVq69CcbG9tCip4kOZpJ2hvztj--T~QczSy0gc9te6--Jx0pG3RBOJaAZYVqHGD-N3XA33rGKuuZoLhBuCjA68D2MyrFIa-NM4D22L82XHA__", "https://cms-toolkit-artifacts.artlist.io/content/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-v1/media__4/-e-x-t-e-r-n-a-l_-i-m-a-g-e_-t-o_-v-i-d-e-o-eea5f9a1-b189-4f80-8d82-cdf66c1c8183.mp4?Expires=2106063845&Key-Pair-Id=K2ZDLYDZI2R1DF&Signature=pibndzcZuqbD7VpS0I3F15fR-q4~6e4S3o3kN5mlaCQwvl0eAOdiIPYxxEfd8OKhQ2cZvcYhCwjkEt9J0YzxO2M2cmmqW4dWzg0I45YDx9s74x3l3l2JvAB3P7efab3VLGuFiYqwY2jLujnHdcjK2rxHcaLtVLhA5lbPP8aE0V55D21O~qVahbblyEKKBySwPtwNda2HxdGcOdR970llZTLKesezmVhVX2RrwZ3tBXYhck473SUALnh0EIaVLnSaLF-sbe7QgyOUyQ5oeZ0SQWGahPNTL7NVCqS1lWtHnSPWH7QSfixrXn8j2lj4jkbLdiVQiyogWr1abvIKoQNmxA__"]; // VIDS[k]: vuelo de la toma k a la toma k+1
   const $ = (id) => document.getElementById(id);
-  const slideEl = $("slide");
-  let cur = 0, fly = null, drift = false, last = performance.now(), swap = 0;
-  const sph = (c, t) => { const o = c.clone().sub(t), r = o.length(); return { r, az: Math.atan2(o.x, o.z), el: Math.asin(o.y / r) }; };
-  const place = (t, r, az, el) => camera.position.set(t.x + r * Math.cos(el) * Math.sin(az), t.y + r * Math.sin(el), t.z + r * Math.cos(el) * Math.cos(az));
+  const slideEl = $("slide"), still = $("still"), vid = $("vid"), layer = $("layer");
+  let cur = 0, swap = 0, busy = false;
+  // precargar fotos y videos
+  IMGS.forEach((u) => { const i = new Image(); i.src = u; });
+  const pre = VIDS.map((u) => { const v = document.createElement("video"); v.muted = true; v.preload = "auto"; v.src = u; return v; });
   function show(i) {
     slideEl.classList.add("out");
     clearTimeout(swap);
-    swap = setTimeout(() => { $("stitle").textContent = slides[i].title; $("stext").textContent = slides[i].text; slideEl.classList.toggle("cover", !!slides[i].cover); slideEl.classList.remove("out"); }, reduceMotion ? 0 : 650);
+    swap = setTimeout(() => { $("stitle").textContent = slides[i].title; $("stext").textContent = slides[i].text; slideEl.classList.toggle("cover", !!slides[i].cover); slideEl.classList.remove("out"); }, 650);
   }
-  function go(i, dur) {
-    if (i < 0 || i >= slides.length) return;
-    cur = i; show(i);
-    const s = slides[i], b = new THREE.Vector3(...s.cam), tt = new THREE.Vector3(...s.tgt);
-    if (reduceMotion) { camera.position.copy(b); controls.target.copy(tt); fly = null; drift = false; return; }
-    const ft = controls.target.clone(), A = sph(camera.position, ft), B = sph(b, tt);
-    const daz = Math.atan2(Math.sin(B.az - A.az), Math.cos(B.az - A.az));
-    const travel = ft.distanceTo(tt);
-    fly = { t0: performance.now(), dur: dur || 7000, ft, tt, A, B, daz,
-      swing: 0.35 * (daz >= 0 ? 1 : -1), lift: Math.min(0.55, 0.12 + travel / 500), rise: Math.min(0.35, 0.08 + travel / 900) };
-    drift = false;
+  function hold() { layer.classList.add("hold"); }
+  function setStill(i) { still.src = IMGS[i]; vid.classList.remove("on"); }
+  function go(i) {
+    if (i < 0 || i >= slides.length || i === cur) return;
+    const fwd = i === cur + 1;
+    layer.classList.remove("hold");
+    show(i);
+    if (fwd && VIDS[cur]) {
+      const from = cur;
+      vid.src = VIDS[from]; vid.currentTime = 0;
+      vid.onended = () => { still.src = IMGS[i]; hold(); };
+      vid.onerror = () => { setStill(i); hold(); };
+      vid.play().then(() => vid.classList.add("on")).catch(() => { setStill(i); hold(); });
+    } else { setStill(i); setTimeout(hold, 50); }
+    cur = i;
   }
-  const next = () => go(cur + 1), prev = () => go(cur - 1);
-  window.addEventListener("pointerup", (e) => { if (e.button === 0) next(); });
-  window.addEventListener("contextmenu", (e) => { e.preventDefault(); prev(); });
+  window.addEventListener("pointerup", (e) => { if (e.button === 0) go(cur + 1); });
+  window.addEventListener("contextmenu", (e) => { e.preventDefault(); go(cur - 1); });
   const fullscreen = () => { try { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); } catch (e) {} };
   window.addEventListener("keydown", (e) => {
-    if (["ArrowRight", "PageDown", " ", "Enter", "ArrowDown"].includes(e.key)) { e.preventDefault(); next(); }
-    else if (["ArrowLeft", "PageUp", "ArrowUp", "Backspace"].includes(e.key)) { e.preventDefault(); prev(); }
+    if (["ArrowRight", "PageDown", " ", "Enter", "ArrowDown"].includes(e.key)) { e.preventDefault(); go(cur + 1); }
+    else if (["ArrowLeft", "PageUp", "ArrowUp", "Backspace"].includes(e.key)) { e.preventDefault(); go(cur - 1); }
     else if (e.key === "f" || e.key === "F") fullscreen();
   });
   let idle = 0;
   window.addEventListener("pointermove", () => { document.body.classList.remove("idle"); clearTimeout(idle); idle = setTimeout(() => document.body.classList.add("idle"), 2500); });
-  controls.enabled = false;
-
-  function resize() {
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    renderer.setSize(w, h, false);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-  }
-  window.addEventListener("resize", resize);
-  resize();
-  setHour(16.8);
-  // Entrada: la cámara llega desde lejos a la primera toma
-  camera.position.set(1500, 780, 2300); controls.target.set(0, 0, -30); camera.lookAt(controls.target);
-  go(0, 9000);
-
-  let fpsAcc = 0, fpsN = 0;
-  function loop(now) {
-    const dt = Math.min(0.1, (now - last) / 1000); last = now;
-    if (fly) {
-      const k = Math.min(1, (now - fly.t0) / fly.dur), e = k * k * k * (k * (k * 6 - 15) + 10), arc = Math.sin(Math.PI * e);
-      const { A, B } = fly;
-      controls.target.lerpVectors(fly.ft, fly.tt, e);
-      place(controls.target,
-        (A.r + (B.r - A.r) * e) * (1 + fly.lift * arc),
-        A.az + fly.daz * e + fly.swing * arc,
-        Math.min(1.35, A.el + (B.el - A.el) * e + fly.rise * arc));
-      if (k >= 1) { fly = null; drift = true; }
-    } else if (drift) {
-      // deriva lenta: órbita y leve acercamiento
-      const o = sph(camera.position, controls.target);
-      place(controls.target, Math.max(o.r * (1 - 0.006 * dt), 10), o.az + 0.045 * dt, o.el);
-    }
-    // si la animación va lenta, baja la resolución
-    fpsAcc += dt; fpsN++;
-    if (fpsAcc > 2) { if (fpsAcc / fpsN > 0.045 && dpr > 0.75) { dpr = Math.max(0.75, dpr - 0.25); renderer.setPixelRatio(dpr); resize(); } fpsAcc = 0; fpsN = 0; }
-    if (!window.__MA.paused) { if (!fly && !drift) controls.update(); else camera.lookAt(controls.target);
-      draw(); }
-    requestAnimationFrame(loop);
-  }
-  function draw() {
-    sun.target.position.set(controls.target.x * 0.5, 0, controls.target.z * 0.5);
-    sun.position.copy(sunDir).multiplyScalar(1000).add(sun.target.position);
-    renderer.render(scene, camera);
-  }
-  window.__MA = { paused: false, go, camera };
-  requestAnimationFrame(loop);
-  window.__ready = true;
+  still.src = IMGS[0];
+  $("stitle").textContent = slides[0].title; $("stext").textContent = slides[0].text; slideEl.classList.add("cover");
+  requestAnimationFrame(() => { slideEl.classList.remove("out"); hold(); });
+  void pre;
 })();
 </script>
 

@@ -2,8 +2,11 @@
 
 Presentación de 8 diapositivas, más portada y cierre, sobre los zapotecas con una maqueta 3D de la Gran Plaza zapoteca de fondo. En cada cambio de diapositiva la cámara vuela a una nueva toma.
 
-**Ver en línea:** https://emilianocros27-bit.github.io/presentaci-nzapotecas/
-**Modo ligero** (menos árboles y pasto, para equipos lentos): https://emilianocros27-bit.github.io/presentaci-nzapotecas/#ligero
+**Versión realista (videos generados con IA):** https://emilianocros27-bit.github.io/presentaci-nzapotecas/
+**Versión maqueta 3D:** https://emilianocros27-bit.github.io/presentaci-nzapotecas/3d.html
+**Maqueta 3D, modo ligero:** https://emilianocros27-bit.github.io/presentaci-nzapotecas/3d.html#ligero
+
+La versión realista usa imágenes y transiciones de video creadas con Artlist (Nano Banana Pro y Kling 3.0) a partir de tomas de la maqueta 3D.
 
 ## Cómo se usa
 
